@@ -1,0 +1,8 @@
+.env
+.vscode
+.venv
+*__pycache__*
+testes.*
+teste*
+*json
+*xlsx
