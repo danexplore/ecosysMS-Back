@@ -25,6 +25,7 @@ def calculate_dashboard_kpis(
         - clientes_ativos: int - Soma de todas as pipelines CS (ONBOARDING, ONGOING, BRADESCO)
         - clientes_pagantes: int - Clientes ativos com valor > 0
         - clientes_onboarding: int - Clientes em CS | ONBOARDING ou CS | BRADESCO sem data_end_onboarding
+        - clientes_churn: int - Clientes na pipeline "Churns & Cancelamentos"
         - mrr_value: float - MRR calculado com base nos clientes ativos
         - churn_value: float - Soma dos valores dos clientes em "Churns & Cancelamentos"
         - tmo_dias: float - Tempo médio de onboarding em dias
@@ -45,6 +46,7 @@ def calculate_dashboard_kpis(
         clientes_ativos = 0
         clientes_pagantes = 0
         clientes_onboarding = 0
+        clientes_churn = 0
         mrr_value = 0.0
         churn_value = 0.0
         
@@ -96,6 +98,7 @@ def calculate_dashboard_kpis(
             # Churn value: somar valores de clientes em "Churns & Cancelamentos"
             if pipeline == pipeline_churn:
                 churn_value += valor
+                clientes_churn += 1
         
         # Calcular TMO médio
         tmo_dias = round(sum(tempos_onboarding) / len(tempos_onboarding), 1) if tempos_onboarding else 0.0
@@ -103,6 +106,7 @@ def calculate_dashboard_kpis(
         logger.info(f"Clientes ativos: {clientes_ativos}")
         logger.info(f"Clientes pagantes: {clientes_pagantes}")
         logger.info(f"Clientes em onboarding: {clientes_onboarding}")
+        logger.info(f"Clientes em churn: {clientes_churn}")
         logger.info(f"MRR: R$ {mrr_value:,.2f}")
         logger.info(f"Churn Value: R$ {churn_value:,.2f}")
         logger.info(f"TMO: {tmo_dias} dias (baseado em {len(tempos_onboarding)} clientes)")
@@ -125,6 +129,7 @@ def calculate_dashboard_kpis(
             "clientes_ativos": clientes_ativos,
             "clientes_pagantes": clientes_pagantes,
             "clientes_onboarding": clientes_onboarding,
+            "clientes_churn": clientes_churn,
             "mrr_value": round(mrr_value, 2),
             "churn_value": round(churn_value, 2),
             "tmo_dias": tmo_dias,
