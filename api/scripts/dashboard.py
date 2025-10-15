@@ -219,7 +219,7 @@ def calculate_health_distribution(health_scores: Dict) -> Dict[str, int]:
     }
     
     # Iterar sobre os health scores
-    for tenant_id, data in health_scores.items():
+    for slug, data in health_scores.items():
         if isinstance(data, dict):
             health_level = data.get('categoria', '')
             if health_level in distribution:
