@@ -156,10 +156,6 @@ def calculate_dashboard_kpis(
                 # Clientes em onboarding: CS | ONBOARDING ou CS | BRADESCO sem data_end_onboarding
                 if (pipeline in ["CS | ONBOARDING", "CS | BRADESCO"]) and not data_end_onboarding:
                     clientes_onboarding += 1
-            
-            # Churn value: somar valores de clientes em "Churns & Cancelamentos"
-            if pipeline == pipeline_churn:
-                churn_value += valor
         
         # Calcular TMO médio
         tmo_dias = round(sum(tempos_onboarding) / len(tempos_onboarding), 1) if tempos_onboarding else 0.0
@@ -204,7 +200,6 @@ def calculate_dashboard_kpis(
     except Exception as e:
         logger.error(f"Erro ao calcular KPIs do dashboard: {e}")
         raise
-
 
 def calculate_health_distribution(health_scores: Dict) -> Dict[str, int]:
     """
