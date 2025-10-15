@@ -2,7 +2,7 @@ LOGINS_BY_TENANT = """
 -- Query para buscar todos os logins de um tenant nos últimos 30 dias
 SELECT
     al.id,
-    al.tenant_id,
+    COALESCE(al.tenant_id, u.tenant_id) AS tenant_id,
     al.subject_id,
     u.name as usuario_nome,
     u.email as usuario_email,
@@ -12,7 +12,7 @@ SELECT
 FROM activity_log al
 LEFT JOIN users u ON u.id = al.subject_id
 WHERE al.event = 'login'
-    AND al.tenant_id = %s
+    AND COALESCE(al.tenant_id, u.tenant_id) = %s
     AND al.created_at >= CURDATE() - INTERVAL 30 DAY
 ORDER BY al.created_at DESC
 """
@@ -44,6 +44,7 @@ from
   left join statuses s on s.id = ck.status_id
 where
   ck.deleted_at is null
+  and co.cnpj is not null
 order by ck.data_adesao desc
 """
 

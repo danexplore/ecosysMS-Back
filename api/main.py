@@ -227,6 +227,57 @@ async def get_clientes(
         logger.error(f"Erro ao obter clientes: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erro ao obter clientes: {str(e)}")
 
+@app.get("/clientes/evolution", dependencies=[Depends(verify_basic_auth)])
+async def get_clientes_evolution(
+    data_inicio: Optional[str] = None,
+    data_fim: Optional[str] = None
+):
+    """
+    Retorna a evolução mensal de clientes pagantes (novos, churns e ativos acumulados).
+    
+    Considera apenas clientes com valor > 0 (pagantes).
+    
+    Args:
+        data_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
+        data_fim: Data final para filtro (formato: YYYY-MM-DD)
+    
+    Returns:
+        Lista com evolução mensal:
+        - mes: string (formato: "jan/2024")
+        - novos_clientes: int (clientes pagantes que aderiram no mês)
+        - churns: int (clientes pagantes que cancelaram no mês)
+        - clientes_ativos: int (total acumulado de clientes pagantes ativos)
+    """
+    try:
+        # Gerar chave de cache dinâmica
+        cache_key = f"evolution:{data_inicio or 'all'}:{data_fim or 'all'}"
+        
+        # Verificar cache
+        cached = redis.get(cache_key)
+        if cached:
+            logger.info(f"✅ Cache hit para {cache_key}")
+            return json.loads(cached)
+        
+        # Calcular evolução
+        logger.info(f"❌ Cache miss para {cache_key}, calculando evolução...")
+        from .scripts.clientes import calculate_clientes_evolution
+        
+        loop = asyncio.get_event_loop()
+        evolution = await loop.run_in_executor(
+            executor, 
+            lambda: calculate_clientes_evolution(data_inicio, data_fim)
+        )
+        
+        # Salvar no cache
+        redis.set(cache_key, json.dumps(evolution), ex=CACHE_TTL_CLIENTES)
+        logger.info(f"💾 Evolução calculada e salva no cache: {len(evolution)} meses")
+        
+        return evolution
+        
+    except Exception as e:
+        logger.error(f"Erro ao calcular evolução de clientes: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro ao calcular evolução de clientes: {str(e)}")
+
 @app.get("/health-scores", dependencies=[Depends(verify_basic_auth)])
 async def get_health_scores(
     data_inicio: Optional[str] = None,
@@ -323,7 +374,7 @@ async def clear_cache():
     """Limpa todos os caches da aplicação"""
     try:      
         # Buscar todas as chaves de cache
-        for prefix in ["clientes:", "health-scores:", "dashboard:"]:
+        for prefix in ["clientes:", "health-scores:", "dashboard:", "evolution:"]:
             redis.delete(prefix + "default")
             redis.delete(prefix + "all:all")
             pass
@@ -339,7 +390,7 @@ async def clear_cache():
         raise HTTPException(status_code=500, detail=f"Erro ao limpar cache: {str(e)}")
 
 @app.get("/logins", dependencies=[Depends(verify_basic_auth)])
-async def get_logins(request: LoginRequest = Body(...)):
+async def get_logins(tenant_id: str):
     """
     Retorna todos os registros de login de um tenant nos últimos 30 dias.
     
@@ -350,7 +401,6 @@ async def get_logins(request: LoginRequest = Body(...)):
         JSON com lista de logins e estatísticas
     """
     try:
-        tenant_id = request.tenant_id
         logger.info(f"Buscando logins para tenant_id: {tenant_id}")
         
         # Executar query em thread separada para não bloquear

@@ -171,7 +171,7 @@ def calculate_dashboard_kpis(
         # Buscar distribuição de health scores
         try:
             health_scores = merge_dataframes(data_inicio, data_fim)
-            clientes_health = calculate_health_distribution(health_scores)
+            clientes_health = calculate_health_distribution(health_scores, clientes)
             logger.info(f"Distribuição de health scores: {clientes_health}")
         except Exception as e:
             logger.error(f"Erro ao calcular distribuição de health scores: {e}")
@@ -201,15 +201,17 @@ def calculate_dashboard_kpis(
         logger.error(f"Erro ao calcular KPIs do dashboard: {e}")
         raise
 
-def calculate_health_distribution(health_scores: Dict) -> Dict[str, int]:
+def calculate_health_distribution(health_scores: Dict, clientes: list) -> Dict[str, int]:
     """
     Calcula a distribuição de clientes por categoria de health score.
+    Conta apenas clientes com valor > 0.
     
     Args:
-        health_scores: Dicionário com health scores dos clientes
+        health_scores: Dicionário com health scores dos clientes (indexado por tenant_id)
+        clientes: Lista de clientes com informações de valor
     
     Returns:
-        Dict com contagem por categoria: {"Crítico": 0, "Baixo": 0, ...}
+        Dict com contagem por categoria: {"Crítico": 0, "Normal": 0, ...}
     """
     distribution = {
         "Crítico": 0,
@@ -218,11 +220,30 @@ def calculate_health_distribution(health_scores: Dict) -> Dict[str, int]:
         "Campeão": 0
     }
     
+    # Criar mapeamento de client_id para valor
+    clientes_valor = {}
+    for cliente in clientes:
+        client_id = cliente.get('client_id')
+        valor = cliente.get('valor', 0)
+        
+        # Converter valor para float se necessário
+        if isinstance(valor, Decimal):
+            valor = float(valor)
+        elif valor is None:
+            valor = 0.0
+            
+        clientes_valor[client_id] = valor
+    
     # Iterar sobre os health scores
-    for slug, data in health_scores.items():
+    for tenant_id, data in health_scores.items():
         if isinstance(data, dict):
+            client_id = data.get('client_id')
             health_level = data.get('categoria', '')
-            if health_level in distribution:
+            
+            # Verificar se cliente tem valor > 0
+            valor_cliente = clientes_valor.get(client_id, 0)
+            
+            if valor_cliente > 0 and health_level in distribution:
                 distribution[health_level] += 1
     
     return distribution

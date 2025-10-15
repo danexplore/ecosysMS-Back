@@ -261,6 +261,114 @@ def fetch_tenant_logins(tenant_id: int) -> Dict:
     finally:
         conn.close()
 
+def calculate_clientes_evolution(
+    data_inicio: Optional[str] = None,
+    data_fim: Optional[str] = None
+) -> List[Dict]:
+    """
+    Calcula a evolução mensal de clientes pagantes.
+    
+    Retorna dados agregados por mês com:
+    - Novos clientes pagantes (data_adesao no mês)
+    - Churns de clientes pagantes (data_cancelamento no mês)
+    - Total acumulado de clientes ativos
+    
+    Args:
+        data_inicio: Data inicial para filtro (YYYY-MM-DD)
+        data_fim: Data final para filtro (YYYY-MM-DD)
+    
+    Returns:
+        Lista de dicionários com evolução mensal:
+        [
+            {
+                "mes": "jan/2024",
+                "novos_clientes": 45,
+                "churns": 12,
+                "clientes_ativos": 230
+            },
+            ...
+        ]
+    """
+    from collections import defaultdict
+    
+    logger.info(f"Calculando evolução de clientes (período: {data_inicio} a {data_fim})...")
+    
+    # Buscar todos os clientes do período
+    clientes_list = fetch_clientes(data_inicio, data_fim)
+    
+    # Filtrar apenas clientes pagantes (valor > 0)
+    clientes_pagantes = [
+        c for c in clientes_list 
+        if c.get('valor') and float(c.get('valor', 0)) > 0
+    ]
+    
+    logger.info(f"Total de clientes pagantes no período: {len(clientes_pagantes)}")
+    
+    # Agrupar por mês
+    months_map = defaultdict(lambda: {"novos": 0, "churns": 0})
+    
+    for cliente in clientes_pagantes:
+        # Processar data de adesão (novos clientes pagantes)
+        data_adesao = cliente.get('data_adesao')
+        if data_adesao:
+            try:
+                if isinstance(data_adesao, str):
+                    date = datetime.datetime.fromisoformat(data_adesao.replace('Z', '+00:00'))
+                elif isinstance(data_adesao, datetime.datetime):
+                    date = data_adesao
+                elif isinstance(data_adesao, datetime.date):
+                    date = datetime.datetime.combine(data_adesao, datetime.time.min)
+                else:
+                    continue
+                    
+                month_key = f"{date.year}-{str(date.month).zfill(2)}"
+                months_map[month_key]["novos"] += 1
+            except Exception as e:
+                logger.warning(f"Erro ao processar data_adesao do cliente {cliente.get('client_id')}: {e}")
+        
+        # Processar data de cancelamento (churns de clientes pagantes)
+        data_cancelamento = cliente.get('data_cancelamento')
+        if data_cancelamento:
+            try:
+                if isinstance(data_cancelamento, str):
+                    date = datetime.datetime.fromisoformat(data_cancelamento.replace('Z', '+00:00'))
+                elif isinstance(data_cancelamento, datetime.datetime):
+                    date = data_cancelamento
+                elif isinstance(data_cancelamento, datetime.date):
+                    date = datetime.datetime.combine(data_cancelamento, datetime.time.min)
+                else:
+                    continue
+                    
+                month_key = f"{date.year}-{str(date.month).zfill(2)}"
+                months_map[month_key]["churns"] += 1
+            except Exception as e:
+                logger.warning(f"Erro ao processar data_cancelamento do cliente {cliente.get('client_id')}: {e}")
+    
+    # Ordenar por mês
+    sorted_months = sorted(months_map.items(), key=lambda x: x[0])
+    
+    # Calcular clientes ativos acumulados
+    clientes_ativos = 0
+    evolution = []
+    month_names = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez']
+    
+    for month_key, data in sorted_months:
+        clientes_ativos += data["novos"] - data["churns"]
+        
+        # Formatar mês para exibição (ex: "jan/2024")
+        year, month = month_key.split('-')
+        mes_formatado = f"{month_names[int(month) - 1]}/{year}"
+        
+        evolution.append({
+            "mes": mes_formatado,
+            "novos_clientes": data["novos"],
+            "churns": data["churns"],
+            "clientes_ativos": clientes_ativos
+        })
+    
+    logger.info(f"✅ Evolução calculada: {len(evolution)} meses")
+    return evolution
+
 # REMOVED: to_json_file() - não deve ser executado no import
 # Se precisar executar, chame explicitamente: python -m api.scripts.clientes
 if __name__ == "__main__":
