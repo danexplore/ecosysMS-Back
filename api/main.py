@@ -101,8 +101,9 @@ except Exception as e:
 executor = ThreadPoolExecutor(max_workers=4)
 
 # Configurações de cache
-CACHE_TTL_CLIENTES = 300  # 5 minutos
-CACHE_TTL_HEALTH_SCORES = 600  # 10 minutos
+CACHE_TTL_CLIENTES = 60 * 60 * 24  # 1 dia
+CACHE_TTL_HEALTH_SCORES = 60 * 60 * 24  # 1 dia
+CACHE_TTL_DASHBOARD = 60 * 60 * 24  # 1 dia
 
 def cache_key_generator(*args, **kwargs) -> str:
     """Gera uma chave de cache única baseada nos argumentos"""
@@ -309,9 +310,9 @@ async def get_dashboard(
         result = await loop.run_in_executor(executor, lambda: calculate_dashboard_kpis(data_inicio, data_fim))
         
         # Salvar no cache
-        redis.set(cache_key, json.dumps(jsonable_encoder(result)), ex=CACHE_TTL_HEALTH_SCORES)
-        logger.info(f"💾 Dados salvos no cache: {cache_key} (TTL: {CACHE_TTL_HEALTH_SCORES}s)")
-        
+        redis.set(cache_key, json.dumps(jsonable_encoder(result)), ex=CACHE_TTL_DASHBOARD)
+        logger.info(f"💾 Dados salvos no cache: {cache_key} (TTL: {CACHE_TTL_DASHBOARD}s)")
+
         return result
     except Exception as e:
         logger.error(f"Erro ao obter dashboard: {str(e)}")
