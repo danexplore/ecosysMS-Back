@@ -38,18 +38,23 @@ def sanitize_for_json(obj):
     return obj
 
 def fetch_clientes(
-    data_adesao_inicio: Optional[str] = None,
-    data_adesao_fim: Optional[str] = None
+    data_inicio: Optional[str] = None,
+    data_fim: Optional[str] = None
 ) -> List[Dict]:
     """
     Busca clientes do banco PostgreSQL.
     
+    Filtra por período considerando TANTO clientes que aderiram 
+    quanto clientes que deram churn no período especificado.
+    
     Args:
-        data_adesao_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
-        data_adesao_fim: Data final para filtro (formato: YYYY-MM-DD)
+        data_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
+        data_fim: Data final para filtro (formato: YYYY-MM-DD)
     
     Returns:
-        Lista de dicionários com dados dos clientes
+        Lista de dicionários com dados dos clientes que:
+        - Aderiram no período (data_adesao) OU
+        - Deram churn no período (data_cancelamento)
     """
     conn = get_conn()
     cur = conn.cursor()
@@ -62,10 +67,11 @@ def fetch_clientes(
         cliente = dict(zip(columns, row))
         
         # Aplicar filtro de data se fornecido
-        if data_adesao_inicio or data_adesao_fim:
+        if data_inicio or data_fim:
             data_adesao = cliente.get('data_adesao')
+            data_cancelamento = cliente.get('data_cancelamento')
             
-            # Converter data_adesao para datetime se for string
+            # Converter data_adesao para date
             if data_adesao and isinstance(data_adesao, str):
                 try:
                     data_adesao = datetime.datetime.fromisoformat(data_adesao.replace('Z', '+00:00')).date()
@@ -74,23 +80,61 @@ def fetch_clientes(
             elif isinstance(data_adesao, datetime.datetime):
                 data_adesao = data_adesao.date()
             
-            # Filtrar por data_adesao_inicio
-            if data_adesao_inicio and data_adesao:
+            # Converter data_cancelamento para date
+            if data_cancelamento and isinstance(data_cancelamento, str):
                 try:
-                    inicio = datetime.datetime.strptime(data_adesao_inicio, '%Y-%m-%d').date()
-                    if data_adesao < inicio:
-                        continue
+                    data_cancelamento = datetime.datetime.fromisoformat(data_cancelamento.replace('Z', '+00:00')).date()
                 except:
-                    logger.warning(f"Formato inválido para data_adesao_inicio: {data_adesao_inicio}")
+                    data_cancelamento = None
+            elif isinstance(data_cancelamento, datetime.datetime):
+                data_cancelamento = data_cancelamento.date()
             
-            # Filtrar por data_adesao_fim
-            if data_adesao_fim and data_adesao:
+            # Converter datas de filtro
+            inicio = None
+            fim = None
+            
+            if data_inicio:
                 try:
-                    fim = datetime.datetime.strptime(data_adesao_fim, '%Y-%m-%d').date()
-                    if data_adesao > fim:
-                        continue
+                    inicio = datetime.datetime.strptime(data_inicio, '%Y-%m-%d').date()
                 except:
-                    logger.warning(f"Formato inválido para data_adesao_fim: {data_adesao_fim}")
+                    logger.warning(f"Formato inválido para data_inicio: {data_inicio}")
+            
+            if data_fim:
+                try:
+                    fim = datetime.datetime.strptime(data_fim, '%Y-%m-%d').date()
+                except:
+                    logger.warning(f"Formato inválido para data_fim: {data_fim}")
+            
+            # Verificar se cliente está no período
+            # Cliente é incluído se:
+            # 1. Aderiu no período (data_adesao entre inicio e fim) OU
+            # 2. Deu churn no período (data_cancelamento entre inicio e fim)
+            
+            incluir_cliente = False
+            
+            # Verificar adesão no período
+            if data_adesao:
+                adesao_no_periodo = True
+                if inicio and data_adesao < inicio:
+                    adesao_no_periodo = False
+                if fim and data_adesao > fim:
+                    adesao_no_periodo = False
+                if adesao_no_periodo:
+                    incluir_cliente = True
+            
+            # Verificar churn no período
+            if data_cancelamento and not incluir_cliente:
+                churn_no_periodo = True
+                if inicio and data_cancelamento < inicio:
+                    churn_no_periodo = False
+                if fim and data_cancelamento > fim:
+                    churn_no_periodo = False
+                if churn_no_periodo:
+                    incluir_cliente = True
+            
+            # Se não está no período, pular este cliente
+            if not incluir_cliente:
+                continue
         
         results.append(cliente)
 
@@ -128,21 +172,23 @@ def clientes_to_json():
     return clientes_dict
 
 def clientes_to_dataframe(
-    data_adesao_inicio: Optional[str] = None,
-    data_adesao_fim: Optional[str] = None
+    data_inicio: Optional[str] = None,
+    data_fim: Optional[str] = None
 ):
     """
     Converter clientes para DataFrame pandas.
     
+    Filtra por período considerando tanto adesões quanto churns.
+    
     Args:
-        data_adesao_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
-        data_adesao_fim: Data final para filtro (formato: YYYY-MM-DD)
+        data_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
+        data_fim: Data final para filtro (formato: YYYY-MM-DD)
     
     Returns:
-        DataFrame pandas com dados dos clientes
+        DataFrame pandas com dados dos clientes que aderiram OU deram churn no período
     """
     import pandas as pd
-    raw_list = fetch_clientes(data_adesao_inicio, data_adesao_fim)
+    raw_list = fetch_clientes(data_inicio, data_fim)
     df = pd.DataFrame(raw_list)
     return df
 

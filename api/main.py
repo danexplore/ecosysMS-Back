@@ -186,19 +186,22 @@ async def health_check():
     
 @app.get("/clientes", dependencies=[Depends(verify_basic_auth)])
 async def get_clientes(
-    data_adesao_inicio: Optional[str] = None,
-    data_adesao_fim: Optional[str] = None
+    data_inicio: Optional[str] = None,
+    data_fim: Optional[str] = None
 ):
     """
     Retorna a lista de clientes em JSON, indexada por client_id.
     
+    Filtra por data de adesão OU data de cancelamento, permitindo capturar tanto
+    novos clientes quanto churns no mesmo período.
+    
     Args:
-        data_adesao_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
-        data_adesao_fim: Data final para filtro (formato: YYYY-MM-DD)
+        data_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
+        data_fim: Data final para filtro (formato: YYYY-MM-DD)
     """
     try:
         # Gerar chave de cache dinâmica baseada nos filtros
-        cache_key = f"clientes:{data_adesao_inicio or 'all'}:{data_adesao_fim or 'all'}"
+        cache_key = f"clientes:{data_inicio or 'all'}:{data_fim or 'all'}"
         
         # Verificar cache
         cached = redis.get(cache_key)
@@ -209,7 +212,7 @@ async def get_clientes(
         # Se não há cache, buscar dados
         logger.info(f"❌ Cache miss para {cache_key}, buscando dados...")
         from .scripts.clientes import fetch_clientes
-        clientes_list = fetch_clientes(data_adesao_inicio, data_adesao_fim)
+        clientes_list = fetch_clientes(data_inicio, data_fim)
         
         # Converter para formato JSON indexado por client_id
         clientes_json = {str(c['client_id']): c for c in clientes_list}
@@ -225,20 +228,23 @@ async def get_clientes(
 
 @app.get("/health-scores", dependencies=[Depends(verify_basic_auth)])
 async def get_health_scores(
-    data_adesao_inicio: Optional[str] = None,
-    data_adesao_fim: Optional[str] = None,
+    data_inicio: Optional[str] = None,
+    data_fim: Optional[str] = None,
     credentials: HTTPBasicCredentials = Depends(verify_basic_auth)
 ):
     """
     Retorna os health scores dos clientes em JSON, indexados por tenant_id.
     
+    Filtra por data de adesão OU data de cancelamento, permitindo capturar tanto
+    novos clientes quanto churns no mesmo período.
+    
     Args:
-        data_adesao_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
-        data_adesao_fim: Data final para filtro (formato: YYYY-MM-DD)
+        data_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
+        data_fim: Data final para filtro (formato: YYYY-MM-DD)
     """
     try:
         # Gerar chave de cache dinâmica baseada nos filtros
-        cache_key = f"health-scores:{data_adesao_inicio or 'all'}:{data_adesao_fim or 'all'}"
+        cache_key = f"health-scores:{data_inicio or 'all'}:{data_fim or 'all'}"
         
         # Verificar cache
         cached = redis.get(cache_key)
@@ -249,7 +255,7 @@ async def get_health_scores(
         # Se não há cache, buscar dados
         logger.info(f"❌ Cache miss para {cache_key}, buscando dados...")
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(executor, lambda: merge_dataframes(data_adesao_inicio, data_adesao_fim))
+        result = await loop.run_in_executor(executor, lambda: merge_dataframes(data_inicio, data_fim))
         
         # Salvar no cache
         redis.set(cache_key, json.dumps(jsonable_encoder(result)), ex=CACHE_TTL_HEALTH_SCORES)
@@ -262,21 +268,26 @@ async def get_health_scores(
 
 @app.get("/dashboard", dependencies=[Depends(verify_basic_auth)])
 async def get_dashboard(
-    data_adesao_inicio: Optional[str] = None,
-    data_adesao_fim: Optional[str] = None,
+    data_inicio: Optional[str] = None,
+    data_fim: Optional[str] = None,
     credentials: HTTPBasicCredentials = Depends(verify_basic_auth)
 ):
     """
     Retorna os principais KPIs do sistema.
     
+    Filtra por data de adesão OU data de cancelamento, permitindo analisar tanto
+    novos clientes quanto churns no mesmo período.
+    
     Args:
-        data_adesao_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
-        data_adesao_fim: Data final para filtro (formato: YYYY-MM-DD)
+        data_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
+        data_fim: Data final para filtro (formato: YYYY-MM-DD)
     
     Returns:
         - clientes_ativos: Total de clientes nas pipelines CS
         - clientes_pagantes: Clientes ativos com valor > 0
         - clientes_onboarding: Clientes em onboarding sem data de finalização
+        - novos_clientes: Clientes que aderiram no período (data_adesao)
+        - clientes_churn: Clientes que cancelaram no período (data_cancelamento)
         - mrr_value: Receita mensal recorrente
         - churn_value: Valor total de clientes em churn
         - tmo_dias: Tempo médio de onboarding em dias
@@ -284,7 +295,7 @@ async def get_dashboard(
     """
     try:
         # Gerar chave de cache dinâmica baseada nos filtros
-        cache_key = f"dashboard:{data_adesao_inicio or 'all'}:{data_adesao_fim or 'all'}"
+        cache_key = f"dashboard:{data_inicio or 'all'}:{data_fim or 'all'}"
         
         # Verificar cache
         cached = redis.get(cache_key)
@@ -295,7 +306,7 @@ async def get_dashboard(
         # Se não há cache, buscar dados
         logger.info(f"❌ Cache miss para {cache_key}, buscando dados...")
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(executor, lambda: calculate_dashboard_kpis(data_adesao_inicio, data_adesao_fim))
+        result = await loop.run_in_executor(executor, lambda: calculate_dashboard_kpis(data_inicio, data_fim))
         
         # Salvar no cache
         redis.set(cache_key, json.dumps(jsonable_encoder(result)), ex=CACHE_TTL_HEALTH_SCORES)
@@ -313,13 +324,14 @@ async def clear_cache():
         # Buscar todas as chaves de cache
         for prefix in ["clientes:", "health-scores:", "dashboard:"]:
             redis.delete(prefix + "default")
+            redis.delete(prefix + "all:all")
             pass
         
         logger.info("Cache limpo com sucesso")
         return {
             "status": "success",
             "message": "Cache será limpo automaticamente no próximo TTL",
-            "note": "Para forçar atualização, aguarde o TTL expirar ou reinicie a aplicação"
+            "note": "Para forçar a atualização, aguarde o TTL expirar ou reinicie a aplicação"
         }
     except Exception as e:
         logger.error(f"Erro ao limpar cache: {str(e)}")

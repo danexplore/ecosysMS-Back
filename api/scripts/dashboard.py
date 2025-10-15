@@ -10,33 +10,36 @@ logger = logging.getLogger(__name__)
 
 
 def calculate_dashboard_kpis(
-    data_adesao_inicio: Optional[str] = None,
-    data_adesao_fim: Optional[str] = None
+    data_inicio: Optional[str] = None,
+    data_fim: Optional[str] = None
 ) -> Dict:
     """
     Calcula os principais KPIs do sistema.
     
+    Filtra por período considerando tanto adesões quanto churns.
+    
     Args:
-        data_adesao_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
-        data_adesao_fim: Data final para filtro (formato: YYYY-MM-DD)
+        data_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
+        data_fim: Data final para filtro (formato: YYYY-MM-DD)
     
     Returns:
         Dict com os KPIs:
-        - clientes_ativos: int - Soma de todas as pipelines CS (ONBOARDING, ONGOING, BRADESCO)
+        - clientes_ativos: int - Clientes ativos nas pipelines CS
         - clientes_pagantes: int - Clientes ativos com valor > 0
-        - clientes_onboarding: int - Clientes em CS | ONBOARDING ou CS | BRADESCO sem data_end_onboarding
-        - clientes_churn: int - Clientes na pipeline "Churns & Cancelamentos"
-        - mrr_value: float - MRR calculado com base nos clientes ativos
-        - churn_value: float - Soma dos valores dos clientes em "Churns & Cancelamentos"
+        - clientes_onboarding: int - Clientes em onboarding sem data_end_onboarding
+        - novos_clientes: int - Clientes que aderiram no período
+        - clientes_churn: int - Clientes que deram churn no período
+        - mrr_value: float - MRR dos clientes ativos
+        - churn_value: float - Valor perdido com churns do período
         - tmo_dias: float - Tempo médio de onboarding em dias
         - clientes_health: dict - Distribuição por categoria de health score
     """
     try:
-        logger.info(f"Iniciando cálculo de KPIs do dashboard (filtro: {data_adesao_inicio} até {data_adesao_fim})...")
+        logger.info(f"Iniciando cálculo de KPIs do dashboard (filtro: {data_inicio} até {data_fim})...")
         
-        # Buscar dados de clientes com filtro de data
-        clientes = fetch_clientes(data_adesao_inicio, data_adesao_fim)
-        logger.info(f"Total de clientes carregados: {len(clientes)}")
+        # Buscar dados de clientes (adesões OU churns no período)
+        clientes = fetch_clientes(data_inicio, data_fim)
+        logger.info(f"Total de clientes no período: {len(clientes)}")
         
         # Pipelines CS consideradas ativas
         pipelines_cs_ativas = ["CS | ONBOARDING", "CS | ONGOING", "CS | BRADESCO"]
@@ -46,25 +49,84 @@ def calculate_dashboard_kpis(
         clientes_ativos = 0
         clientes_pagantes = 0
         clientes_onboarding = 0
-        clientes_churn = 0
+        novos_clientes = 0      # Aderiram no período
+        clientes_churn = 0      # Deram churn no período
         mrr_value = 0.0
         churn_value = 0.0
         
         # Para cálculo de TMO
         tempos_onboarding = []
         
+        # Converter datas de filtro para comparação
+        data_inicio_obj = None
+        data_fim_obj = None
+        if data_inicio:
+            try:
+                data_inicio_obj = datetime.strptime(data_inicio, '%Y-%m-%d').date()
+            except:
+                pass
+        if data_fim:
+            try:
+                data_fim_obj = datetime.strptime(data_fim, '%Y-%m-%d').date()
+            except:
+                pass
+        
         # Processar clientes
         for cliente in clientes:
             pipeline = cliente.get('pipeline', '')
+            status = cliente.get('status', '')
             valor = cliente.get('valor', 0)
             data_end_onboarding = cliente.get('data_end_onboarding')
             data_start_onboarding = cliente.get('data_start_onboarding')
+            data_adesao = cliente.get('data_adesao')
+            data_cancelamento = cliente.get('data_cancelamento')
             
             # Converter valor para float se for Decimal
             if isinstance(valor, Decimal):
                 valor = float(valor)
             elif valor is None:
                 valor = 0.0
+            
+            # Contar novos clientes (aderiram no período)
+            if data_adesao:
+                data_adesao_obj = None
+                if isinstance(data_adesao, str):
+                    try:
+                        data_adesao_obj = datetime.fromisoformat(data_adesao.replace('Z', '+00:00')).date()
+                    except:
+                        pass
+                elif isinstance(data_adesao, datetime):
+                    data_adesao_obj = data_adesao.date()
+                
+                if data_adesao_obj:
+                    adesao_no_periodo = True
+                    if data_inicio_obj and data_adesao_obj < data_inicio_obj:
+                        adesao_no_periodo = False
+                    if data_fim_obj and data_adesao_obj > data_fim_obj:
+                        adesao_no_periodo = False
+                    if adesao_no_periodo:
+                        novos_clientes += 1
+            
+            # Contar churns (cancelaram no período)
+            if data_cancelamento:
+                data_cancelamento_obj = None
+                if isinstance(data_cancelamento, str):
+                    try:
+                        data_cancelamento_obj = datetime.fromisoformat(data_cancelamento.replace('Z', '+00:00')).date()
+                    except:
+                        pass
+                elif isinstance(data_cancelamento, datetime):
+                    data_cancelamento_obj = data_cancelamento.date()
+                
+                if data_cancelamento_obj:
+                    churn_no_periodo = True
+                    if data_inicio_obj and data_cancelamento_obj < data_inicio_obj:
+                        churn_no_periodo = False
+                    if data_fim_obj and data_cancelamento_obj > data_fim_obj:
+                        churn_no_periodo = False
+                    if churn_no_periodo and status == "CHURNS":
+                        clientes_churn += 1
+                        churn_value += valor  # Somar valor perdido
             
             # Calcular TMO: clientes com data_start e data_end de onboarding
             if data_start_onboarding and data_end_onboarding:
@@ -98,7 +160,6 @@ def calculate_dashboard_kpis(
             # Churn value: somar valores de clientes em "Churns & Cancelamentos"
             if pipeline == pipeline_churn:
                 churn_value += valor
-                clientes_churn += 1
         
         # Calcular TMO médio
         tmo_dias = round(sum(tempos_onboarding) / len(tempos_onboarding), 1) if tempos_onboarding else 0.0
@@ -113,7 +174,7 @@ def calculate_dashboard_kpis(
         
         # Buscar distribuição de health scores
         try:
-            health_scores = merge_dataframes(data_adesao_inicio, data_adesao_fim)
+            health_scores = merge_dataframes(data_inicio, data_fim)
             clientes_health = calculate_health_distribution(health_scores)
             logger.info(f"Distribuição de health scores: {clientes_health}")
         except Exception as e:
@@ -129,6 +190,7 @@ def calculate_dashboard_kpis(
             "clientes_ativos": clientes_ativos,
             "clientes_pagantes": clientes_pagantes,
             "clientes_onboarding": clientes_onboarding,
+            "novos_clientes": novos_clientes,
             "clientes_churn": clientes_churn,
             "mrr_value": round(mrr_value, 2),
             "churn_value": round(churn_value, 2),

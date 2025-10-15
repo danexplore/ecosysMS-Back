@@ -376,21 +376,23 @@ def select_final_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 def filter_active_clients(
     df: pd.DataFrame,
-    data_adesao_inicio: Optional[str] = None,
-    data_adesao_fim: Optional[str] = None
+    data_inicio: Optional[str] = None,
+    data_fim: Optional[str] = None
 ) -> pd.DataFrame:
     """
     Filtra apenas clientes ativos baseado na lista de clientes.
     
+    Considera clientes que aderiram OU deram churn no período.
+    
     Args:
         df: DataFrame com todos os dados
-        data_adesao_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
-        data_adesao_fim: Data final para filtro (formato: YYYY-MM-DD)
+        data_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
+        data_fim: Data final para filtro (formato: YYYY-MM-DD)
     
     Returns:
-        DataFrame filtrado com apenas clientes ativos
+        DataFrame filtrado com apenas clientes ativos (ou que deram churn) no período
     """
-    clientes = clientes_to_dataframe(data_adesao_inicio, data_adesao_fim)
+    clientes = clientes_to_dataframe(data_inicio, data_fim)
     
     # Conversões de tipo em batch
     df['cnpj'] = pd.to_numeric(df['cnpj'], errors='coerce').fillna(0).astype('int64')
@@ -535,15 +537,17 @@ def dataframe_to_dict(df: pd.DataFrame) -> Dict:
 
 
 def merge_dataframes(
-    data_adesao_inicio: Optional[str] = None,
-    data_adesao_fim: Optional[str] = None
+    data_inicio: Optional[str] = None,
+    data_fim: Optional[str] = None
 ):
     """
     Orquestra todo o processo de cálculo de health scores.
     
+    Filtra por período considerando tanto adesões quanto churns.
+    
     Args:
-        data_adesao_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
-        data_adesao_fim: Data final para filtro (formato: YYYY-MM-DD)
+        data_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
+        data_fim: Data final para filtro (formato: YYYY-MM-DD)
     
     Pipeline:
     1. Busca dados (queries paralelas)
@@ -554,7 +558,9 @@ def merge_dataframes(
     6. Converte para dicionário
     
     Returns:
-        Dict com health scores indexados por slug
+        Dict com health scores indexados por slug para clientes que:
+        - Aderiram no período (data_adesao) OU
+        - Deram churn no período (data_cancelamento)
     """
     # 1. Buscar todos os dados
     dfs = fetch_all_data()
@@ -574,8 +580,8 @@ def merge_dataframes(
     # 6. Selecionar colunas finais
     df_fusao = select_final_columns(df_fusao)
     
-    # 7. Filtrar apenas clientes ativos (com filtro de data se fornecido)
-    df_fusao = filter_active_clients(df_fusao, data_adesao_inicio, data_adesao_fim)
+    # 7. Filtrar clientes do período (adesões OU churns)
+    df_fusao = filter_active_clients(df_fusao, data_inicio, data_fim)
     
     # 8. Categorizar clientes
     df_fusao = categorize_clients(df_fusao)
