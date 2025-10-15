@@ -507,8 +507,14 @@ def dataframe_to_dict(df: pd.DataFrame) -> Dict:
                     'crm': round(float(row.score_crm), 2) if pd.notna(row.score_crm) else 0.0,
                     'total': round(float(row.score_total), 2) if pd.notna(row.score_total) else 0.0
                 },
+                'adoption': {
+                    'econversa_status': round(float(row.econversa_status), 2) if hasattr(row, 'econversa_status') and pd.notna(row.econversa_status) else 0.0,
+                    'ads_status': round(float(row.ads_status), 2) if hasattr(row, 'ads_status') and pd.notna(row.ads_status) else 0.0,
+                    'reports_status': round(float(row.reports_status), 2) if hasattr(row, 'reports_status') and pd.notna(row.reports_status) else 0.0,
+                    'contracts_status': round(float(row.contracts_status), 2) if hasattr(row, 'contracts_status') and pd.notna(row.contracts_status) else 0.0
+                },
                 'integrations': {
-                    'econversa_status': bool(row.econversa_status) if hasattr(row, 'econversa_status') else False,
+                    'econversa_status': bool(row.econversa_status) if hasattr(row, 'econversa_status') and pd.notna(row.econversa_status) else False,
                     'integrators_connected': row.integrators_connected if hasattr(row, 'integrators_connected') else []
                 },
                 'metrics': {

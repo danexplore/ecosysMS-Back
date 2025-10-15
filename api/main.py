@@ -403,12 +403,27 @@ async def get_logins(tenant_id: str):
     try:
         logger.info(f"Buscando logins para tenant_id: {tenant_id}")
         
-        # Executar query em thread separada para não bloquear
+        # Gerar chave de cache baseada no tenant_id
+        cache_key = f"logins:{tenant_id}"
+        
+        # Verificar cache
+        cached = redis.get(cache_key)
+        if cached:
+            logger.info(f"✅ Cache hit para {cache_key}")
+            return json.loads(cached)
+        
+        # Se não há cache, buscar dados
+        logger.info(f"❌ Cache miss para {cache_key}, buscando dados...")
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             executor,
             lambda: fetch_tenant_logins(tenant_id)
         )
+        
+        # Salvar no cache (TTL de 1 hora - 3600 segundos)
+        CACHE_TTL_LOGINS = 60 * 60  # 1 hora
+        redis.set(cache_key, json.dumps(jsonable_encoder(result)), ex=CACHE_TTL_LOGINS)
+        logger.info(f"💾 Dados salvos no cache: {cache_key} (TTL: {CACHE_TTL_LOGINS}s)")
         
         return result
         

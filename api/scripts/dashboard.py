@@ -207,7 +207,7 @@ def calculate_health_distribution(health_scores: Dict, clientes: list) -> Dict[s
     Conta apenas clientes com valor > 0.
     
     Args:
-        health_scores: Dicionário com health scores dos clientes (indexado por tenant_id)
+        health_scores: Dicionário com health scores dos clientes (indexado por slug)
         clientes: Lista de clientes com informações de valor
     
     Returns:
@@ -220,10 +220,10 @@ def calculate_health_distribution(health_scores: Dict, clientes: list) -> Dict[s
         "Campeão": 0
     }
     
-    # Criar mapeamento de client_id para valor
+    # Criar mapeamento de CNPJ para valor (health_scores usa CNPJ para matching)
     clientes_valor = {}
     for cliente in clientes:
-        client_id = cliente.get('client_id')
+        cnpj = cliente.get('cnpj')
         valor = cliente.get('valor', 0)
         
         # Converter valor para float se necessário
@@ -231,19 +231,35 @@ def calculate_health_distribution(health_scores: Dict, clientes: list) -> Dict[s
             valor = float(valor)
         elif valor is None:
             valor = 0.0
-            
-        clientes_valor[client_id] = valor
+        
+        # Converter CNPJ para int se necessário
+        if cnpj:
+            try:
+                cnpj = int(cnpj)
+                clientes_valor[cnpj] = valor
+            except (ValueError, TypeError):
+                pass
     
-    # Iterar sobre os health scores
-    for tenant_id, data in health_scores.items():
+    logger.info(f"Mapeamento de clientes com valor: {len(clientes_valor)} clientes")
+    
+    # Iterar sobre os health scores (indexados por slug)
+    for slug, data in health_scores.items():
         if isinstance(data, dict):
-            client_id = data.get('client_id')
+            cnpj = data.get('cnpj')
             health_level = data.get('categoria', '')
             
+            # Converter CNPJ para int se necessário
+            if cnpj:
+                try:
+                    cnpj = int(cnpj)
+                except (ValueError, TypeError):
+                    continue
+            
             # Verificar se cliente tem valor > 0
-            valor_cliente = clientes_valor.get(client_id, 0)
+            valor_cliente = clientes_valor.get(cnpj, 0)
             
             if valor_cliente > 0 and health_level in distribution:
                 distribution[health_level] += 1
     
+    logger.info(f"Distribuição calculada: {distribution}")
     return distribution
