@@ -7,6 +7,7 @@ from fastapi.encoders import jsonable_encoder
 from upstash_redis import Redis
 from .scripts.clientes import clientes_to_json, fetch_tenant_logins
 from .scripts.health_scores import merge_dataframes
+from .scripts.dashboard import calculate_dashboard_kpis
 import os
 import warnings
 import json
@@ -184,32 +185,133 @@ async def health_check():
         raise HTTPException(status_code=500, detail=f"Health check falhou: {str(e)}")
     
 @app.get("/clientes", dependencies=[Depends(verify_basic_auth)])
-@with_cache("clientes", CACHE_TTL_CLIENTES)
-async def get_clientes():
-    """Retorna a lista de clientes em JSON, indexada por client_id."""
+async def get_clientes(
+    data_adesao_inicio: Optional[str] = None,
+    data_adesao_fim: Optional[str] = None
+):
+    """
+    Retorna a lista de clientes em JSON, indexada por client_id.
+    
+    Args:
+        data_adesao_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
+        data_adesao_fim: Data final para filtro (formato: YYYY-MM-DD)
+    """
     try:
-        clientes_json = clientes_to_json()
+        # Gerar chave de cache dinâmica baseada nos filtros
+        cache_key = f"clientes:{data_adesao_inicio or 'all'}:{data_adesao_fim or 'all'}"
+        
+        # Verificar cache
+        cached = redis.get(cache_key)
+        if cached:
+            logger.info(f"✅ Cache hit para {cache_key}")
+            return json.loads(cached)
+        
+        # Se não há cache, buscar dados
+        logger.info(f"❌ Cache miss para {cache_key}, buscando dados...")
+        from .scripts.clientes import fetch_clientes
+        clientes_list = fetch_clientes(data_adesao_inicio, data_adesao_fim)
+        
+        # Converter para formato JSON indexado por client_id
+        clientes_json = {str(c['client_id']): c for c in clientes_list}
+        
+        # Salvar no cache
+        redis.set(cache_key, json.dumps(jsonable_encoder(clientes_json)), ex=CACHE_TTL_CLIENTES)
+        logger.info(f"💾 Dados salvos no cache: {cache_key} (TTL: {CACHE_TTL_CLIENTES}s)")
+        
         return jsonable_encoder(clientes_json)
     except Exception as e:
         logger.error(f"Erro ao obter clientes: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erro ao obter clientes: {str(e)}")
 
 @app.get("/health-scores", dependencies=[Depends(verify_basic_auth)])
-@with_cache("health-scores", CACHE_TTL_HEALTH_SCORES)
-async def get_health_scores(credentials: HTTPBasicCredentials = Depends(verify_basic_auth)):
-    """Retorna os health scores dos clientes em JSON, indexados por tenant_id."""
+async def get_health_scores(
+    data_adesao_inicio: Optional[str] = None,
+    data_adesao_fim: Optional[str] = None,
+    credentials: HTTPBasicCredentials = Depends(verify_basic_auth)
+):
+    """
+    Retorna os health scores dos clientes em JSON, indexados por tenant_id.
+    
+    Args:
+        data_adesao_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
+        data_adesao_fim: Data final para filtro (formato: YYYY-MM-DD)
+    """
     try:
-        return merge_dataframes()
+        # Gerar chave de cache dinâmica baseada nos filtros
+        cache_key = f"health-scores:{data_adesao_inicio or 'all'}:{data_adesao_fim or 'all'}"
+        
+        # Verificar cache
+        cached = redis.get(cache_key)
+        if cached:
+            logger.info(f"✅ Cache hit para {cache_key}")
+            return json.loads(cached)
+        
+        # Se não há cache, buscar dados
+        logger.info(f"❌ Cache miss para {cache_key}, buscando dados...")
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(executor, lambda: merge_dataframes(data_adesao_inicio, data_adesao_fim))
+        
+        # Salvar no cache
+        redis.set(cache_key, json.dumps(jsonable_encoder(result)), ex=CACHE_TTL_HEALTH_SCORES)
+        logger.info(f"💾 Dados salvos no cache: {cache_key} (TTL: {CACHE_TTL_HEALTH_SCORES}s)")
+        
+        return result
     except Exception as e:
         logger.error(f"Erro ao obter health scores: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erro ao obter health scores: {str(e)}")
+
+@app.get("/dashboard", dependencies=[Depends(verify_basic_auth)])
+async def get_dashboard(
+    data_adesao_inicio: Optional[str] = None,
+    data_adesao_fim: Optional[str] = None,
+    credentials: HTTPBasicCredentials = Depends(verify_basic_auth)
+):
+    """
+    Retorna os principais KPIs do sistema.
+    
+    Args:
+        data_adesao_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
+        data_adesao_fim: Data final para filtro (formato: YYYY-MM-DD)
+    
+    Returns:
+        - clientes_ativos: Total de clientes nas pipelines CS
+        - clientes_pagantes: Clientes ativos com valor > 0
+        - clientes_onboarding: Clientes em onboarding sem data de finalização
+        - mrr_value: Receita mensal recorrente
+        - churn_value: Valor total de clientes em churn
+        - tmo_dias: Tempo médio de onboarding em dias
+        - clientes_health: Distribuição por categoria de health score
+    """
+    try:
+        # Gerar chave de cache dinâmica baseada nos filtros
+        cache_key = f"dashboard:{data_adesao_inicio or 'all'}:{data_adesao_fim or 'all'}"
+        
+        # Verificar cache
+        cached = redis.get(cache_key)
+        if cached:
+            logger.info(f"✅ Cache hit para {cache_key}")
+            return json.loads(cached)
+        
+        # Se não há cache, buscar dados
+        logger.info(f"❌ Cache miss para {cache_key}, buscando dados...")
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(executor, lambda: calculate_dashboard_kpis(data_adesao_inicio, data_adesao_fim))
+        
+        # Salvar no cache
+        redis.set(cache_key, json.dumps(jsonable_encoder(result)), ex=CACHE_TTL_HEALTH_SCORES)
+        logger.info(f"💾 Dados salvos no cache: {cache_key} (TTL: {CACHE_TTL_HEALTH_SCORES}s)")
+        
+        return result
+    except Exception as e:
+        logger.error(f"Erro ao obter dashboard: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro ao obter dashboard: {str(e)}")
 
 @app.post("/cache/clear", dependencies=[Depends(verify_basic_auth)])
 async def clear_cache():
     """Limpa todos os caches da aplicação"""
     try:      
         # Buscar todas as chaves de cache
-        for prefix in ["clientes:", "health-scores:"]:
+        for prefix in ["clientes:", "health-scores:", "dashboard:"]:
             redis.delete(prefix + "default")
             pass
         

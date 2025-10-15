@@ -16,6 +16,7 @@ class Cliente(BaseModel):
     data_adesao: Optional[str] = None
     data_start_onboarding: Optional[str] = None
     data_end_onboarding: Optional[str] = None
+    tmo: Optional[int] = None
     data_cancelamento: Optional[str] = None
     motivos_churn: Optional[str] = None
     descricao_cancelamento: Optional[str] = None

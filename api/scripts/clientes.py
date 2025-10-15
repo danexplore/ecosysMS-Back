@@ -5,7 +5,7 @@ import json
 import datetime
 from ..lib.queries import SELECT_CLIENTES, LOGINS_BY_TENANT
 from ..lib.models import Cliente
-from typing import Dict
+from typing import Dict, Optional, List
 import logging
 
 load_dotenv()
@@ -37,7 +37,20 @@ def sanitize_for_json(obj):
         return obj.isoformat()
     return obj
 
-def fetch_clientes():
+def fetch_clientes(
+    data_adesao_inicio: Optional[str] = None,
+    data_adesao_fim: Optional[str] = None
+) -> List[Dict]:
+    """
+    Busca clientes do banco PostgreSQL.
+    
+    Args:
+        data_adesao_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
+        data_adesao_fim: Data final para filtro (formato: YYYY-MM-DD)
+    
+    Returns:
+        Lista de dicionários com dados dos clientes
+    """
     conn = get_conn()
     cur = conn.cursor()
     cur.execute(SELECT_CLIENTES)
@@ -46,7 +59,40 @@ def fetch_clientes():
 
     results = []
     for row in rows:
-        results.append(dict(zip(columns, row)))
+        cliente = dict(zip(columns, row))
+        
+        # Aplicar filtro de data se fornecido
+        if data_adesao_inicio or data_adesao_fim:
+            data_adesao = cliente.get('data_adesao')
+            
+            # Converter data_adesao para datetime se for string
+            if data_adesao and isinstance(data_adesao, str):
+                try:
+                    data_adesao = datetime.datetime.fromisoformat(data_adesao.replace('Z', '+00:00')).date()
+                except:
+                    data_adesao = None
+            elif isinstance(data_adesao, datetime.datetime):
+                data_adesao = data_adesao.date()
+            
+            # Filtrar por data_adesao_inicio
+            if data_adesao_inicio and data_adesao:
+                try:
+                    inicio = datetime.datetime.strptime(data_adesao_inicio, '%Y-%m-%d').date()
+                    if data_adesao < inicio:
+                        continue
+                except:
+                    logger.warning(f"Formato inválido para data_adesao_inicio: {data_adesao_inicio}")
+            
+            # Filtrar por data_adesao_fim
+            if data_adesao_fim and data_adesao:
+                try:
+                    fim = datetime.datetime.strptime(data_adesao_fim, '%Y-%m-%d').date()
+                    if data_adesao > fim:
+                        continue
+                except:
+                    logger.warning(f"Formato inválido para data_adesao_fim: {data_adesao_fim}")
+        
+        results.append(cliente)
 
     cur.close()
     conn.close()
@@ -66,14 +112,37 @@ def clientes_to_json():
         # Garantir que temos um client_id válido
         client_id = cliente_data.get('client_id')
         if client_id:
+            # Calculate TMO (Tempo Médio de Onboarding) if dates are available
+            data_start = cliente_data.get('data_start_onboarding')
+            data_end = cliente_data.get('data_end_onboarding')
+            if data_start and data_end:
+                data_start = datetime.datetime.fromisoformat(data_start)
+                data_end = datetime.datetime.fromisoformat(data_end)
+                tmo = (data_end - data_start).days
+                cliente_data['tmo'] = tmo
+            else:
+                cliente_data['tmo'] = None
+
             clientes_dict[int(client_id)] = cliente_data
     
     return clientes_dict
 
-def clientes_to_dataframe():
-    """Converter clientes para DataFrame pandas"""
+def clientes_to_dataframe(
+    data_adesao_inicio: Optional[str] = None,
+    data_adesao_fim: Optional[str] = None
+):
+    """
+    Converter clientes para DataFrame pandas.
+    
+    Args:
+        data_adesao_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
+        data_adesao_fim: Data final para filtro (formato: YYYY-MM-DD)
+    
+    Returns:
+        DataFrame pandas com dados dos clientes
+    """
     import pandas as pd
-    raw_list = fetch_clientes()
+    raw_list = fetch_clientes(data_adesao_inicio, data_adesao_fim)
     df = pd.DataFrame(raw_list)
     return df
 
