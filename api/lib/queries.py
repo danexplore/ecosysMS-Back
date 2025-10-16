@@ -267,7 +267,7 @@ ORDER BY score_adoption DESC;
 ECONVERSA_STATUS = """
 SELECT
 	t.id,
-	IFNULL(eic.status, 'conecting') AS status_econversa
+	IFNULL(eic.status, 'conecting') AS econversa_connected
 FROM tenants t
 LEFT JOIN econversa_instance_configurations eic ON t.slug = eic.name
 """

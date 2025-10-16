@@ -266,15 +266,15 @@ def process_integration_data(df: pd.DataFrame) -> pd.DataFrame:
     Returns:
         DataFrame com dados de integração processados
     """
-    # Converter status_econversa para booleano
-    if 'status_econversa' in df.columns:
-        df['econversa_status'] = (
-            df['status_econversa']
+    # Converter econversa_connected para booleano
+    if 'econversa_connected' in df.columns:
+        df['econversa_connected'] = (
+            df['econversa_connected']
             .fillna('connecting')
             .str.lower() == 'open'
         )
     else:
-        df['econversa_status'] = False
+        df['econversa_connected'] = False
     
     # Converter string de integradores para lista
     if 'integrators_connected' in df.columns:
@@ -365,8 +365,8 @@ def select_final_columns(df: pd.DataFrame) -> pd.DataFrame:
         'qntd_saidas_30d', 'dias_desde_ultima_saida',
         'score_movimentacao_estoque', 'qntd_leads_30d',
         'dias_desde_ultimo_lead', 'score_crm',
-        'econversa_status', 'integrators_connected', 'ads_status', 'reports_status',
-        'contracts_status', 'score_adoption', 'score_total'
+        'econversa_connected', 'integrators_connected', 'ads_status', 'reports_status',
+        'econversa_status', 'contracts_status', 'score_adoption', 'score_total'
     ]
     
     # Manter apenas as colunas que existem
@@ -514,7 +514,7 @@ def dataframe_to_dict(df: pd.DataFrame) -> Dict:
                     'contracts_status': round(float(row.contracts_status), 2) if hasattr(row, 'contracts_status') and pd.notna(row.contracts_status) else 0.0
                 },
                 'integrations': {
-                    'econversa_status': bool(row.econversa_status) if hasattr(row, 'econversa_status') and pd.notna(row.econversa_status) else False,
+                    'econversa_connected': bool(row.econversa_connected) if hasattr(row, 'econversa_connected') and pd.notna(row.econversa_connected) else False,
                     'integrators_connected': row.integrators_connected if hasattr(row, 'integrators_connected') else []
                 },
                 'metrics': {
