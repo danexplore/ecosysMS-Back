@@ -220,11 +220,12 @@ def calculate_health_distribution(health_scores: Dict, clientes: list) -> Dict[s
         "Campeão": 0
     }
     
-    # Criar mapeamento de CNPJ para valor (health_scores usa CNPJ para matching)
-    clientes_valor = {}
+    # Criar mapeamento de CNPJ para valor e pipeline
+    clientes_info = {}
     for cliente in clientes:
         cnpj = cliente.get('cnpj')
         valor = cliente.get('valor', 0)
+        pipeline = cliente.get('pipeline', '')
         
         # Converter valor para float se necessário
         if isinstance(valor, Decimal):
@@ -236,11 +237,14 @@ def calculate_health_distribution(health_scores: Dict, clientes: list) -> Dict[s
         if cnpj:
             try:
                 cnpj = int(cnpj)
-                clientes_valor[cnpj] = valor
+                clientes_info[cnpj] = {
+                    'valor': valor,
+                    'pipeline': pipeline
+                }
             except (ValueError, TypeError):
                 pass
     
-    logger.info(f"Mapeamento de clientes com valor: {len(clientes_valor)} clientes")
+    logger.info(f"Mapeamento de clientes: {len(clientes_info)} clientes")
     
     # Iterar sobre os health scores (indexados por slug)
     for slug, data in health_scores.items():
@@ -255,10 +259,15 @@ def calculate_health_distribution(health_scores: Dict, clientes: list) -> Dict[s
                 except (ValueError, TypeError):
                     continue
             
-            # Verificar se cliente tem valor > 0
-            valor_cliente = clientes_valor.get(cnpj, 0)
-            
-            if valor_cliente > 0 and health_level in distribution:
+            # Obter informações do cliente
+            cliente_info = clientes_info.get(cnpj, {})
+            valor_cliente = cliente_info.get('valor', 0)
+            pipeline_cliente = cliente_info.get('pipeline', '')
+
+            # Contar apenas clientes pagantes e que NÃO estão em churn
+            if (health_level in distribution and 
+                pipeline_cliente != "Churns & Cancelamentos"):
+                
                 distribution[health_level] += 1
     
     logger.info(f"Distribuição calculada: {distribution}")
