@@ -275,3 +275,35 @@ WHERE deleted_at IS NULL
   AND integrator_id NOT IN (3, 13)
 GROUP BY tenant_id;
 """
+
+METRICAS_CLIENTES = """
+WITH metricas_mensais AS (
+    SELECT
+        -- Trunca a data para o início do mês para facilitar o GROUP BY e ORDER BY
+        DATE_TRUNC('month', data_adesao) AS mes_ordenacao,
+        TO_CHAR(data_adesao, 'MM/YYYY') AS mes_ano,
+        -- 1. Total de Clientes (onde valor > 0)
+        COUNT(*) AS total_clientes,
+        -- 2. Clientes Ativos (excluindo 'Churns & Cancelamentos')
+        COUNT(CASE WHEN pipeline <> 'Churns & Cancelamentos' THEN 1 END) AS clientes_ativos,
+        -- 3. Clientes em Churns/Cancelamentos
+        COUNT(CASE WHEN pipeline = 'Churns & Cancelamentos' THEN 1 END) AS clientes_churn
+    FROM
+        clientes_atual
+    WHERE
+        valor > 0
+    GROUP BY
+        1, 2 -- Agrupa pelo mes_ordenacao e mes_ano
+)
+SELECT
+    mes_ano,
+    total_clientes AS total,
+    clientes_ativos AS ativos,
+    clientes_churn AS churns,
+    -- Conversão para NUMERIC para garantir o cálculo decimal da taxa
+    CONCAT(ROUND((clientes_churn::NUMERIC / total_clientes) * 100,2)::TEXT, '%') AS churn_rate
+FROM
+    metricas_mensais
+ORDER BY
+    mes_ordenacao;
+"""

@@ -3,7 +3,7 @@ import os
 from dotenv import load_dotenv
 import json
 import datetime
-from ..lib.queries import SELECT_CLIENTES, LOGINS_BY_TENANT
+from ..lib.queries import SELECT_CLIENTES, LOGINS_BY_TENANT, METRICAS_CLIENTES
 from ..lib.models import Cliente
 from typing import Dict, Optional, List
 import logging
@@ -368,6 +368,25 @@ def calculate_clientes_evolution(
     
     logger.info(f"✅ Evolução calculada: {len(evolution)} meses")
     return evolution
+
+def metricas_clientes() -> List[Dict]:
+    """
+    Busca todas as métricas dos clientes atuais do banco de dados.
+
+    Retorna uma lista de dicionários com as métricas dos clientes.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(METRICAS_CLIENTES)
+    rows = cur.fetchall()
+    columns = [desc[0] for desc in cur.description]
+
+    results = []
+    for row in rows:
+        cliente = dict(zip(columns, row))
+        results.append(cliente)
+
+    return results
 
 # REMOVED: to_json_file() - não deve ser executado no import
 # Se precisar executar, chame explicitamente: python -m api.scripts.clientes

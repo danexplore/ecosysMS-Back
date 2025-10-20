@@ -5,7 +5,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.encoders import jsonable_encoder
 from upstash_redis import Redis
-from .scripts.clientes import clientes_to_json, fetch_tenant_logins
+from .scripts.clientes import fetch_tenant_logins, metricas_clientes
 from .scripts.health_scores import merge_dataframes
 from .scripts.dashboard import calculate_dashboard_kpis
 import os
@@ -378,9 +378,10 @@ async def clear_cache():
         health_scores = redis.keys('health-scores:*')
         dashboard = redis.keys('dashboard:*')
         evolution = redis.keys('evolution:*')
-        
-        keys = [*clientes, *health_scores, *dashboard, *evolution]
-        
+        metricas = redis.keys('metricas-clientes:*')
+
+        keys = [*clientes, *health_scores, *dashboard, *evolution, *metricas]
+        logger.info(f"Limpando {len(keys)} chaves de cache...")
         print(keys)
         for key in keys:
             redis.delete(key)
@@ -437,3 +438,42 @@ async def get_logins(tenant_id: str):
     except Exception as e:
         logger.error(f"Erro ao buscar logins: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erro ao buscar logins: {str(e)}")
+    
+@app.get("/metricas-clientes", dependencies=[Depends(verify_basic_auth)])
+async def get_metricas_clientes():
+    """
+    Retorna todas as métricas dos clientes atuais do banco de dados.
+    
+    Returns:
+        Lista de dicionários com as métricas dos clientes.
+    """
+    try:
+        logger.info("Buscando métricas dos clientes atuais")
+        
+        # Gerar chave de cache
+        cache_key = "metricas-clientes"
+        
+        # Verificar cache
+        cached = redis.get(cache_key)
+        if cached:
+            logger.info(f"✅ Cache hit para {cache_key}")
+            return json.loads(cached)
+        
+        # Se não há cache, buscar dados
+        logger.info(f"❌ Cache miss para {cache_key}, buscando dados...")
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            executor,
+            lambda: metricas_clientes()
+        )
+        
+        # Salvar no cache
+        CACHE_TTL_METRICAS = 60 * 60 * 24  # 1 dia
+        redis.set(cache_key, json.dumps(jsonable_encoder(result)), ex=CACHE_TTL_METRICAS)
+        logger.info(f"💾 Dados salvos no cache: {cache_key} (TTL: {CACHE_TTL_METRICAS}s)")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Erro ao buscar métricas dos clientes: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro ao buscar métricas dos clientes: {str(e)}")
