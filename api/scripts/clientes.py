@@ -299,7 +299,7 @@ def calculate_clientes_evolution(
     # Filtrar apenas clientes pagantes (valor > 0)
     clientes_pagantes = [
         c for c in clientes_list 
-        if c.get('valor') and float(c.get('valor', 0)) > 0
+        if c.get('valor') and c.get('valor', 0) > 0
     ]
     
     logger.info(f"Total de clientes pagantes no período: {len(clientes_pagantes)}")

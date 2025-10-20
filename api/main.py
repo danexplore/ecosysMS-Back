@@ -374,9 +374,16 @@ async def clear_cache():
     """Limpa todos os caches da aplicação"""
     try:      
         # Buscar todas as chaves de cache
-        for prefix in ["clientes:", "health-scores:", "dashboard:", "evolution:"]:
-            redis.delete(prefix + "default")
-            redis.delete(prefix + "all:all")
+        clientes = redis.keys('clientes:*')
+        health_scores = redis.keys('health-scores:*')
+        dashboard = redis.keys('dashboard:*')
+        evolution = redis.keys('evolution:*')
+        
+        keys = [*clientes, *health_scores, *dashboard, *evolution]
+        
+        print(keys)
+        for key in keys:
+            redis.delete(key)
             pass
         
         logger.info("Cache limpo com sucesso")

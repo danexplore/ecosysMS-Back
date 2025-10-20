@@ -19,33 +19,9 @@ ORDER BY al.created_at DESC
 
 SELECT_CLIENTES = """
 select
-  ck.id as client_id,
-  co.nome,
-  co.razao_social,
-  co.cnpj,
-  ck.valor,
-  ck.vendedor,
-  u."name" as cs,
-  s."name" as status,
-  p."name" as pipeline,
-  ck.data_adesao,
-  ck.data_start_onboarding,
-  ck.data_end_onboarding,
-  ck.data_cancelamento,
-  ck.motivos_churn,
-  ck.descricao_cancelamento,
-  ck.criado_em,
-  ck.atualizado_em
-from
-  clientes_kommo ck
-  left join companies_kommo co on co.id = ck.company_id
-  left join users u on u.id = ck.cs_id
-  left join pipelines p on p.id = ck.pipeline_id
-  left join statuses s on s.id = ck.status_id
-where
-  ck.deleted_at is null
-  and co.cnpj is not null
-order by ck.data_adesao desc
+  *
+from clientes_atual
+order by data_adesao desc
 """
 
 PRIMEIRO_PILAR = """

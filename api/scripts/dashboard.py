@@ -153,10 +153,10 @@ def calculate_dashboard_kpis(
                 if valor > 0:
                     clientes_pagantes += 1
                 
-                # Clientes em onboarding: CS | ONBOARDING ou CS | BRADESCO sem data_end_onboarding
-                if (pipeline in ["CS | ONBOARDING", "CS | BRADESCO"]) and not data_end_onboarding:
-                    clientes_onboarding += 1
-        
+            # Clientes em onboarding: CS | ONBOARDING ou CS | BRADESCO sem data_end_onboarding
+            if (pipeline in ["CS | ONBOARDING", "CS | BRADESCO"] and not data_end_onboarding):
+                clientes_onboarding += 1
+    
         # Calcular TMO médio
         tmo_dias = round(sum(tempos_onboarding) / len(tempos_onboarding), 1) if tempos_onboarding else 0.0
         
