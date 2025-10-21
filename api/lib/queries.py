@@ -277,33 +277,64 @@ GROUP BY tenant_id;
 """
 
 METRICAS_CLIENTES = """
-WITH metricas_mensais AS (
+WITH churns_periodo AS (
     SELECT
-        -- Trunca a data para o início do mês para facilitar o GROUP BY e ORDER BY
-        DATE_TRUNC('month', data_adesao) AS mes_ordenacao,
-        TO_CHAR(data_adesao, 'MM/YYYY') AS mes_ano,
-        -- 1. Total de Clientes (onde valor > 0)
-        COUNT(*) AS total_clientes,
-        -- 2. Clientes Ativos (excluindo 'Churns & Cancelamentos')
-        COUNT(CASE WHEN pipeline <> 'Churns & Cancelamentos' THEN 1 END) AS clientes_ativos,
-        -- 3. Clientes em Churns/Cancelamentos
-        COUNT(CASE WHEN pipeline = 'Churns & Cancelamentos' THEN 1 END) AS clientes_churn
+        DATE_TRUNC('month', data_cancelamento) AS mes_churn,
+        COUNT(client_id) AS clientes_churned
+    FROM
+        clientes_atual
+    WHERE
+        data_cancelamento IS NOT NULL
+        AND valor > 0
+    GROUP BY
+        mes_churn
+),
+entradas_periodo AS (
+    SELECT
+        DATE_TRUNC('month', data_adesao) AS mes_adesao,
+        COUNT(client_id) AS novos_clientes
     FROM
         clientes_atual
     WHERE
         valor > 0
     GROUP BY
-        1, 2 -- Agrupa pelo mes_ordenacao e mes_ano
+        mes_adesao
+),
+dados_mensais AS (
+    -- Etapa 1: Calcula o saldo líquido
+    SELECT
+        ep.mes_adesao,
+        ep.novos_clientes,
+        COALESCE(cp.clientes_churned, 0) AS clientes_churned,
+        (ep.novos_clientes - COALESCE(cp.clientes_churned, 0)) AS saldo_liquido
+    FROM
+        entradas_periodo ep
+    LEFT JOIN 
+        churns_periodo cp ON cp.mes_churn = ep.mes_adesao
+),
+base_acumulada AS (
+    -- Etapa 2: Calcula a soma cumulativa (Total de Ativos FINAL do mês)
+    SELECT
+        dm.*,
+        SUM(dm.saldo_liquido) OVER (ORDER BY dm.mes_adesao ASC) AS total_ativos_final_mes
+    FROM
+        dados_mensais dm
 )
 SELECT
-    mes_ano,
-    total_clientes AS total,
-    clientes_ativos AS ativos,
-    clientes_churn AS churns,
-    -- Conversão para NUMERIC para garantir o cálculo decimal da taxa
-    CONCAT(ROUND((clientes_churn::NUMERIC / total_clientes) * 100,2)::TEXT, '%') AS churn_rate
-FROM
-    metricas_mensais
-ORDER BY
-    mes_ordenacao;
+    TO_CHAR(ba.mes_adesao, 'MM/YYYY') AS mes_referencia,
+    ba.novos_clientes,
+    ba.clientes_churned,
+    ba.total_ativos_final_mes, -- Total de Clientes Ativos no final do mês
+    -- Etapa 3: Aplica o LAG sobre a coluna 'total_ativos_final_mes' (que agora é uma coluna simples)
+    LAG(ba.total_ativos_final_mes, 1, 0) OVER (
+        ORDER BY ba.mes_adesao ASC
+    ) AS total_ativos_inicio_mes, -- Base Final do Mês Anterior = Base Inicial do Mês Atual,
+    ROUND(ba.clientes_churned / LAG(ba.total_ativos_final_mes) OVER (ORDER BY ba.mes_adesao ASC), 4)*100 as churns_rate,
+    ROUND(
+    	(ba.total_ativos_final_mes - LAG(ba.total_ativos_final_mes) OVER (ORDER BY ba.mes_adesao ASC))
+    	/ LAG(ba.total_ativos_final_mes) OVER (ORDER BY ba.mes_adesao ASC), 4)*100 as growth_rate
+FROM 
+    base_acumulada ba
+ORDER BY 
+    ba.mes_adesao ASC
 """
