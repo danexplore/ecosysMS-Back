@@ -377,7 +377,7 @@ async def clear_cache():
         clientes = redis.keys('clientes:*')
         health_scores = redis.keys('health-scores:*')
         dashboard = redis.keys('dashboard:*')
-        evolution = redis.keys('evolution:*')
+        evolution = redis.keys('evolution*')
         metricas = redis.keys('metricas-clientes')
 
         keys = [*clientes, *health_scores, *dashboard, *evolution, *metricas]
