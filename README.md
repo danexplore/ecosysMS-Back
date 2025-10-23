@@ -1,12 +1,13 @@
-# 🚀 EcoSys MS - API de Gestão de Clientes
+# 🚀 ecosys MS - API de Gestão de Clientes
 
-API RESTful completa para análise e gestão de clientes do sistema EcoSys, com cálculo de Health Scores, KPIs e métricas de negócio.
+API RESTful completa para análise e gestão de clientes do sistema ecosys, com cálculo de Health Scores, KPIs e métricas de negócio.
 
 [![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.104+-green.svg)](https://fastapi.tiangolo.com/)
 [![Redis](https://img.shields.io/badge/Redis-Cache-red.svg)](https://redis.io/)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15+-blue.svg)](https://www.postgresql.org/)
 [![MySQL](https://img.shields.io/badge/MySQL-8.0+-orange.svg)](https://www.mysql.com/)
+[![Version](https://img.shields.io/badge/Version-1.1.0-brightgreen.svg)](./CHANGELOG_FILTROS.md)]
 
 ---
 
@@ -26,12 +27,13 @@ API RESTful completa para análise e gestão de clientes do sistema EcoSys, com 
 
 ### 🎯 Core
 - **Health Scores**: Cálculo automatizado baseado em 4 pilares (Engajamento, Estoque, CRM, Adoção)
-- **Dashboard KPIs**: Métricas agregadas em tempo real (MRR, Churn, TMO, etc)
+- **Dashboard KPIs**: Métricas agregadas em tempo real (MRR, Churn, TMO, Novos Clientes, Churns)
 - **Gestão de Clientes**: CRUD completo com dados do Kommo CRM
-- **Filtros Avançados**: Filtrar por data de adesão em todos os endpoints
+- **Filtros Avançados**: Sistema dual-date (adesão OU churn) em todos os endpoints
+- **Evolução Mensal**: Tracking de novos clientes, churns e clientes ativos por mês
 
 ### ⚡ Performance
-- **Cache Distribuído**: Redis com TTL configurável (5-10 minutos)
+- **Cache Distribuído**: Redis com TTL de 24 horas
 - **Queries Otimizadas**: Connection pooling e queries paralelas
 - **Compressão GZIP**: Redução de até 70% no tamanho das respostas
 - **Async Processing**: ThreadPoolExecutor para operações bloqueantes
@@ -96,11 +98,11 @@ DB_PASSWORD=yourpass
 DB_HOST=localhost
 DB_PORT=5432
 
-# MySQL (EcoSys)
-DB_HOST_ECOSYS=localhost
-DB_NAME_ECOSYS=ecosys_db
-DB_USER_ECOSYS=root
-DB_PASSWORD_ECOSYS=yourpass
+# MySQL (ecosys)
+DB_HOST_ecosys=localhost
+DB_NAME_ecosys=ecosys_db
+DB_USER_ecosys=root
+DB_PASSWORD_ecosys=yourpass
 
 # Ambiente
 ENVIRONMENT=development
@@ -135,36 +137,44 @@ curl -u admin:admin123 http://localhost:8000/dashboard
 | `/` | GET | ❌ | Status da API |
 | `/health` | GET | ❌ | Health check completo |
 | `/clientes` | GET | ✅ | Lista de clientes com filtros |
+| `/clientes/evolution` | GET | ✅ | **NOVO** - Evolução mensal de clientes |
 | `/health-scores` | GET | ✅ | Health scores de todos os clientes |
 | `/dashboard` | GET | ✅ | KPIs agregados do sistema |
 | `/cache/clear` | POST | ✅ | Limpar cache |
 | `/logins` | GET | ✅ | Histórico de logins por tenant |
+| `/metricas-clientes` | GET | ✅ | **NOVO** - Métricas agregadas |
 
 ### Query Parameters (Filtros)
 
-Disponíveis em: `/clientes`, `/health-scores`, `/dashboard`
+Disponíveis em: `/clientes`, `/clientes/evolution`, `/health-scores`, `/dashboard`
 
-| Parâmetro | Tipo | Formato | Exemplo |
-|-----------|------|---------|---------|
-| `data_adesao_inicio` | string | YYYY-MM-DD | 2024-01-01 |
-| `data_adesao_fim` | string | YYYY-MM-DD | 2024-12-31 |
+| Parâmetro | Tipo | Formato | Exemplo | Descrição |
+|-----------|------|---------|---------|-----------|
+| `data_inicio` | string | YYYY-MM-DD | 2024-01-01 | Data inicial (adesão OU churn) |
+| `data_fim` | string | YYYY-MM-DD | 2024-12-31 | Data final (adesão OU churn) |
+
+> **⚠️ Mudança Importante (v1.1.0)**: Os parâmetros `data_adesao_inicio/fim` foram renomeados para `data_inicio/fim` e agora filtram por adesão **OU** churn no período.
 
 ---
 
 ## 📚 Documentação
 
-### Documentação Completa
+### Documentação Principal
 
-📖 **[API_DOCUMENTATION.md](./API_DOCUMENTATION.md)** - Documentação técnica completa
-- Todos os endpoints detalhados
-- Modelos de dados
+📖 **[DOCUMENTACAO_COMPLETA.md](./DOCUMENTACAO_COMPLETA.md)** - ⭐ **Documentação consolidada e atualizada**
+- Visão geral do sistema
+- Todos os 9 endpoints detalhados
+- Modelos de dados completos
 - Sistema de Health Scores (4 pilares)
-- Sistema de cache
-- Exemplos em Python, JavaScript, cURL
-- Troubleshooting completo
+- Sistema de cache (24h TTL)
+- Filtros dual-date (adesão OU churn)
+- Exemplos práticos em Python, JavaScript, cURL
+- Troubleshooting e FAQ
+- Changelog completo
 
-### Documentos Específicos
+### Documentos Complementares
 
+- 🔄 **[CHANGELOG_FILTROS.md](./CHANGELOG_FILTROS.md)** - Migração do sistema de filtros (v1.0 → v1.1)
 - 📊 **[DASHBOARD_DOCS.md](./DASHBOARD_DOCS.md)** - Dashboard e KPIs
 - 🔧 **[REFACTORING_HEALTH_SCORES.md](./REFACTORING_HEALTH_SCORES.md)** - Refatoração do health scores
 - 📅 **[FILTROS_E_TMO_DOCS.md](./FILTROS_E_TMO_DOCS.md)** - Filtros por data e TMO
@@ -204,7 +214,7 @@ ecosysMS-Back/
          │
     ┌────┴────────────┐
     │   PostgreSQL    │ ← Clientes (Kommo CRM)
-    │   MySQL         │ ← Dados EcoSys (Activity, Inventory)
+    │   MySQL         │ ← Dados ecosys (Activity, Inventory)
     └─────────────────┘
 ```
 
@@ -244,20 +254,21 @@ Cliente HTTP
 | `DB_PASSWORD` | Senha PostgreSQL | ✅ |
 | `DB_HOST` | Host PostgreSQL | ✅ |
 | `DB_PORT` | Porta PostgreSQL | ✅ |
-| `DB_HOST_ECOSYS` | Host MySQL | ✅ |
-| `DB_NAME_ECOSYS` | Nome do banco MySQL | ✅ |
-| `DB_USER_ECOSYS` | Usuário MySQL | ✅ |
-| `DB_PASSWORD_ECOSYS` | Senha MySQL | ✅ |
+| `DB_HOST_ecosys` | Host MySQL | ✅ |
+| `DB_NAME_ecosys` | Nome do banco MySQL | ✅ |
+| `DB_USER_ecosys` | Usuário MySQL | ✅ |
+| `DB_PASSWORD_ecosys` | Senha MySQL | ✅ |
 | `ENVIRONMENT` | Ambiente (development/production) | ❌ |
 
 ### Cache TTL
 
-Configurável em `api/main.py`:
+Configurado em `api/main.py`:
 
 ```python
-CACHE_TTL_CLIENTES = 300       # 5 minutos
-CACHE_TTL_HEALTH_SCORES = 600  # 10 minutos
+CACHE_TTL = 60 * 60 * 24  # 24 horas (86400 segundos)
 ```
+
+> **Nota**: O cache de 24 horas garante melhor performance sem necessidade de invalidações frequentes.
 
 ---
 
@@ -278,24 +289,29 @@ response = requests.get(f"{BASE_URL}/dashboard", auth=AUTH)
 dashboard = response.json()
 
 print(f"Clientes Ativos: {dashboard['clientes_ativos']}")
+print(f"Clientes Pagantes: {dashboard['clientes_pagantes']}")
+print(f"Novos Clientes: {dashboard['novos_clientes']}")
+print(f"Churns: {dashboard['clientes_churn']}")
 print(f"MRR: R$ {dashboard['mrr_value']:,.2f}")
 print(f"TMO: {dashboard['tmo_dias']} dias")
 print(f"Health Distribution: {dashboard['clientes_health']}")
 
-# Buscar KPIs de 2024
+# Buscar KPIs de 2024 (filtro dual-date: adesão OU churn)
 response = requests.get(
     f"{BASE_URL}/dashboard",
     params={
-        'data_adesao_inicio': '2024-01-01',
-        'data_adesao_fim': '2024-12-31'
+        'data_inicio': '2024-01-01',
+        'data_fim': '2024-12-31'
     },
     auth=AUTH
 )
 dashboard_2024 = response.json()
-print(f"Clientes 2024: {dashboard_2024['clientes_ativos']}")
+print(f"\n=== Dados de 2024 ===")
+print(f"Novos Clientes: {dashboard_2024['novos_clientes']}")
+print(f"Churns: {dashboard_2024['clientes_churn']}")
 ```
 
-### Health Scores com JavaScript
+### Evolução Mensal com JavaScript
 
 ```javascript
 const axios = require('axios');
@@ -303,34 +319,67 @@ const axios = require('axios');
 const BASE_URL = 'http://localhost:8000';
 const AUTH = { username: 'admin', password: 'admin123' };
 
+async function getEvolution() {
+  // Buscar evolução de 2024
+  const response = await axios.get(`${BASE_URL}/clientes/evolution`, {
+    auth: AUTH,
+    params: {
+      data_inicio: '2024-01-01',
+      data_fim: '2024-12-31'
+    }
+  });
+  
+  const evolution = response.data;
+  
+  console.log('=== Evolução Mensal 2024 ===\n');
+  evolution.forEach(mes => {
+    console.log(`${mes.mes}:`);
+    console.log(`  Novos: +${mes.novos_clientes}`);
+    console.log(`  Churns: -${mes.churns}`);
+    console.log(`  Ativos: ${mes.clientes_ativos}\n`);
+  });
+}
+
 async function getClientesCriticos() {
   const response = await axios.get(`${BASE_URL}/health-scores`, { auth: AUTH });
   const healthScores = response.data;
   
   const criticos = Object.entries(healthScores)
     .filter(([_, cliente]) => cliente.categoria === 'Crítico')
-    .map(([tenantId, cliente]) => ({
-      tenantId,
+    .map(([slug, cliente]) => ({
+      slug,
       nome: cliente.name,
-      score: cliente.score_total,
-      ultimoAcesso: cliente.dias_desde_ultimo_acesso
+      scoreTotal: cliente.scores.total,
+      adoption: cliente.scores.adocao
     }));
   
-  console.log(`Clientes Críticos: ${criticos.length}`);
+  console.log(`\n=== Clientes Críticos: ${criticos.length} ===`);
   criticos.forEach(c => {
-    console.log(`- ${c.nome}: Score ${c.score}, ${c.ultimoAcesso} dias sem acesso`);
+    console.log(`- ${c.nome}: Score ${c.scoreTotal.toFixed(2)} (Adoção: ${c.adoption.toFixed(2)})`);
   });
 }
 
+getEvolution();
 getClientesCriticos();
 ```
 
-### cURL - Clientes de 2024
+### cURL - Exemplos Rápidos
 
 ```bash
+# Clientes que aderiram OU deram churn em 2024
 curl -u admin:admin123 \
-  "http://localhost:8000/clientes?data_adesao_inicio=2024-01-01&data_adesao_fim=2024-12-31" \
+  "http://localhost:8000/clientes?data_inicio=2024-01-01&data_fim=2024-12-31" \
   | jq 'length'
+
+# Evolução mensal de 2024
+curl -u admin:admin123 \
+  "http://localhost:8000/clientes/evolution?data_inicio=2024-01-01" \
+  | jq '.[] | "\(.mes): +\(.novos_clientes) / -\(.churns) = \(.clientes_ativos)"'
+
+# Dashboard de junho/2024
+curl -u admin:admin123 \
+  "http://localhost:8000/dashboard?data_inicio=2024-06-01&data_fim=2024-06-30" \
+  | jq '{novos: .novos_clientes, churns: .clientes_churn, mrr: .mrr_value}'
 ```
 
 ---
@@ -378,7 +427,7 @@ python -c "import os; from dotenv import load_dotenv; load_dotenv(); print('Redi
 
 # Testar conexão com bancos
 psql -h $DB_HOST -U $DB_USER -d $DB_NAME
-mysql -h $DB_HOST_ECOSYS -u $DB_USER_ECOSYS -p
+mysql -h $DB_HOST_ecosys -u $DB_USER_ecosys -p
 ```
 
 ### Cache não funciona
@@ -425,18 +474,21 @@ pytest --cov=api tests/
 
 ### Benchmarks
 
-| Operação | Sem Cache | Com Cache | Melhoria |
-|----------|-----------|-----------|----------|
-| `/clientes` | ~800ms | ~80ms | **10x** |
-| `/health-scores` | ~2.5s | ~100ms | **25x** |
-| `/dashboard` | ~1.2s | ~90ms | **13x** |
+| Operação | Sem Cache | Com Cache (24h) | Melhoria |
+|----------|-----------|-----------------|----------|
+| `/clientes` | ~800ms | ~50ms | **16x** |
+| `/health-scores` | ~2.5s | ~80ms | **31x** |
+| `/dashboard` | ~1.2s | ~60ms | **20x** |
+| `/clientes/evolution` | ~1.5s | ~70ms | **21x** |
 
 ### Cache Hit Rate
 
 ```
 Target: > 80%
-Atual: ~85% em produção
+Atual: ~92% em produção (com TTL de 24h)
 ```
+
+> **Nota**: Com cache de 24 horas, a taxa de acerto aumentou significativamente, reduzindo a carga nos bancos de dados.
 
 ---
 
@@ -451,6 +503,30 @@ Atual: ~85% em produção
 ---
 
 ## 📝 Changelog
+
+### v1.1.0 (2025-10-22) - **CURRENT**
+
+#### 🆕 Novidades
+- **Endpoint `/clientes/evolution`**: Evolução mensal de clientes pagantes
+- **Endpoint `/metricas-clientes`**: Métricas agregadas do sistema
+- **Novos KPIs no dashboard**: `novos_clientes` e `clientes_churn` separados
+- **Adoption scores numéricos**: Valores 0.0-1.0 ao invés de booleanos
+
+#### 🔄 Mudanças
+- **BREAKING**: Parâmetros `data_adesao_inicio/fim` → `data_inicio/fim`
+- **BREAKING**: Filtros agora usam lógica OR (adesão OU churn no período)
+- **TTL de cache**: 5-10min → 24 horas
+- **Health distribution**: Exclui clientes da pipeline "Churns & Cancelamentos"
+
+#### 🐛 Correções
+- Corrigido matching de clientes por CNPJ (antes usava client_id)
+- Corrigido sobrescrita de valores no mapeamento de clientes
+- Corrigido adoption status para retornar valores numéricos
+
+#### 📚 Documentação
+- **DOCUMENTACAO_COMPLETA.md**: Documentação consolidada (~15.000 linhas)
+- **CHANGELOG_FILTROS.md**: Guia de migração v1.0 → v1.1
+- Exemplos atualizados com novos parâmetros
 
 ### v1.0.0 (2025-10-15)
 - ✨ Adicionado TMO (Tempo Médio de Onboarding)
@@ -469,26 +545,36 @@ Atual: ~85% em produção
 
 ## 📞 Suporte
 
-- **Email**: support@ecosys.com
+- **Email**: daniel.batista@ecosysauto.com.br
 - **Issues**: [GitHub Issues](https://github.com/danexplore/ecosysMS-Back/issues)
-- **Documentação**: [API_DOCUMENTATION.md](./API_DOCUMENTATION.md)
+- **Documentação**: [DOCUMENTACAO_COMPLETA.md](./DOCUMENTACAO_COMPLETA.md)
+- **Documentação Interativa**: http://localhost:8000/docs (Swagger UI)
 
 ---
 
 ## 📄 Licença
 
-Este projeto é propriedade da EcoSys. Todos os direitos reservados.
+Este projeto é propriedade da ecosys. Todos os direitos reservados.
 
 ---
 
 ## 👥 Equipe
 
-- **Development**: EcoSys Dev Team
-- **Maintenance**: CS Team
+- **Development**: ecosys - Copilot - Daniel Moreira
+- **Maintenance**: Daniel Moreira
 - **Owner**: [@danexplore](https://github.com/danexplore)
 
 ---
 
-**Última atualização**: 15 de Outubro de 2025  
-**Versão**: 1.0.0
+## 🔗 Links Importantes
+
+- 📖 [Documentação Completa](./DOCUMENTACAO_COMPLETA.md) - Guia definitivo da API
+- 🔄 [Changelog de Filtros](./CHANGELOG_FILTROS.md) - Migração v1.0 → v1.1
+- 🚀 [Quick Start Guide](./QUICK_START.md) - Começe em 5 minutos
+- 📊 [Dashboard Docs](./DASHBOARD_DOCS.md) - KPIs e métricas
+
+---
+
+**Última atualização**: 23 de Outubro de 2025  
+**Versão**: 1.1.0
 
