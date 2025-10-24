@@ -36,7 +36,7 @@ def init_connection_pool():
         try:
             connection_pool = pooling.MySQLConnectionPool(
                 pool_name="ecosys_pool",
-                pool_size=5,  # Número de conexões no pool
+                pool_size=10,  # Aumentado para suportar queries paralelas
                 pool_reset_session=True,
                 host=os.getenv('DB_HOST_ECOSYS'),
                 database=os.getenv('DB_NAME_ECOSYS'),
@@ -46,7 +46,7 @@ def init_connection_pool():
                 autocommit=True,
                 connect_timeout=10
             )
-            logger.info("✅ Pool de conexões MySQL criado com sucesso")
+            logger.info("✅ Pool de conexões MySQL criado com sucesso (pool_size=10)")
             return connection_pool
         except Error as e:
             logger.error(f"❌ Erro ao criar pool de conexões: {e}")
@@ -106,7 +106,9 @@ def execute_queries_parallel(queries: List[tuple]) -> Dict[str, pd.DataFrame]:
             conn.close()
     
     # Executar queries em paralelo usando ThreadPoolExecutor
-    with ThreadPoolExecutor(max_workers=min(len(queries), 5)) as executor:
+    # Limita workers ao tamanho do pool para evitar esgotamento
+    max_parallel_queries = min(len(queries), 7)  # Máximo de 7 queries simultâneas
+    with ThreadPoolExecutor(max_workers=max_parallel_queries) as executor:
         future_to_query = {
             executor.submit(execute_single_query, name, query): name 
             for name, query in queries

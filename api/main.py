@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from functools import wraps
 import hashlib
 import asyncio
+import threading
 
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional
@@ -100,6 +101,17 @@ except Exception as e:
 
 # Thread pool para operações bloqueantes
 executor = ThreadPoolExecutor(max_workers=4)
+
+# Locks para evitar execuções duplicadas simultâneas
+cache_locks = {}
+locks_lock = threading.Lock()
+
+def get_cache_lock(cache_key: str) -> threading.Lock:
+    """Obtém ou cria um lock para uma chave de cache específica"""
+    with locks_lock:
+        if cache_key not in cache_locks:
+            cache_locks[cache_key] = threading.Lock()
+        return cache_locks[cache_key]
 
 # Configurações de cache
 CACHE_TTL_CLIENTES = 60 * 60 * 24  # 1 dia
@@ -305,16 +317,44 @@ async def get_health_scores(
             logger.info(f"✅ Cache hit para {cache_key}")
             return json.loads(cached)
         
-        # Se não há cache, buscar dados
-        logger.info(f"❌ Cache miss para {cache_key}, buscando dados...")
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(executor, lambda: merge_dataframes(data_inicio, data_fim))
+        # Usar lock para evitar múltiplas execuções simultâneas
+        cache_lock = get_cache_lock(cache_key)
         
-        # Salvar no cache
-        redis.set(cache_key, json.dumps(jsonable_encoder(result)), ex=CACHE_TTL_HEALTH_SCORES)
-        logger.info(f"💾 Dados salvos no cache: {cache_key} (TTL: {CACHE_TTL_HEALTH_SCORES}s)")
+        # Tentar adquirir o lock sem bloquear
+        lock_acquired = cache_lock.acquire(blocking=False)
         
-        return result
+        if not lock_acquired:
+            # Outra thread está processando, aguardar e verificar cache novamente
+            logger.info(f"⏳ Aguardando processamento em andamento para {cache_key}...")
+            await asyncio.sleep(0.5)  # Pequeno delay
+            cached = redis.get(cache_key)
+            if cached:
+                logger.info(f"✅ Cache disponível após aguardar: {cache_key}")
+                return json.loads(cached)
+            # Se ainda não tem cache, bloquear e aguardar
+            cache_lock.acquire(blocking=True)
+        
+        try:
+            # Verificar cache novamente após adquirir lock
+            cached = redis.get(cache_key)
+            if cached:
+                logger.info(f"✅ Cache hit dentro do lock para {cache_key}")
+                return json.loads(cached)
+            
+            # Se não há cache, buscar dados
+            logger.info(f"❌ Cache miss para {cache_key}, buscando dados...")
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(executor, lambda: merge_dataframes(data_inicio, data_fim))
+            
+            # Salvar no cache
+            redis.set(cache_key, json.dumps(jsonable_encoder(result)), ex=CACHE_TTL_HEALTH_SCORES)
+            logger.info(f"💾 Dados salvos no cache: {cache_key} (TTL: {CACHE_TTL_HEALTH_SCORES}s)")
+            
+            return result
+        finally:
+            # Liberar o lock
+            cache_lock.release()
+            
     except Exception as e:
         logger.error(f"Erro ao obter health scores: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erro ao obter health scores: {str(e)}")
