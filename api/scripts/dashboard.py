@@ -204,7 +204,7 @@ def calculate_dashboard_kpis(
 def calculate_health_distribution(health_scores: Dict, clientes: list) -> Dict[str, int]:
     """
     Calcula a distribuição de clientes por categoria de health score.
-    Conta apenas clientes com valor > 0.
+    Conta apenas clientes ativos com valor > 0.
     
     Args:
         health_scores: Dicionário com health scores dos clientes (indexado por slug)
