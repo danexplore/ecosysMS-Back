@@ -266,7 +266,8 @@ def calculate_health_distribution(health_scores: Dict, clientes: list) -> Dict[s
 
             # Contar apenas clientes pagantes e que NÃO estão em churn
             if (health_level in distribution and 
-                pipeline_cliente != "Churns & Cancelamentos"):
+                pipeline_cliente != "Churns & Cancelamentos"
+                and valor_cliente > 0):
                 
                 distribution[health_level] += 1
     
