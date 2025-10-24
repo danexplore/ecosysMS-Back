@@ -4,7 +4,6 @@ from typing import Dict, Optional
 from decimal import Decimal
 from datetime import datetime
 from .clientes import fetch_clientes
-from .health_scores import merge_dataframes
 
 logger = logging.getLogger(__name__)
 
@@ -167,21 +166,7 @@ def calculate_dashboard_kpis(
         logger.info(f"MRR: R$ {mrr_value:,.2f}")
         logger.info(f"Churn Value: R$ {churn_value:,.2f}")
         logger.info(f"TMO: {tmo_dias} dias (baseado em {len(tempos_onboarding)} clientes)")
-        
-        # Buscar distribuição de health scores
-        try:
-            health_scores = merge_dataframes(data_inicio, data_fim)
-            clientes_health = calculate_health_distribution(health_scores, clientes)
-            logger.info(f"Distribuição de health scores: {clientes_health}")
-        except Exception as e:
-            logger.error(f"Erro ao calcular distribuição de health scores: {e}")
-            clientes_health = {
-                "Crítico": 0,
-                "Normal": 0,
-                "Saudável": 0,
-                "Campeão": 0
-            }
-        
+                    
         result = {
             "clientes_ativos": clientes_ativos,
             "clientes_pagantes": clientes_pagantes,
@@ -190,8 +175,7 @@ def calculate_dashboard_kpis(
             "clientes_churn": clientes_churn,
             "mrr_value": round(mrr_value, 2),
             "churn_value": round(churn_value, 2),
-            "tmo_dias": tmo_dias,
-            "clientes_health": clientes_health
+            "tmo_dias": tmo_dias
         }
         
         logger.info("✅ KPIs do dashboard calculados com sucesso")
@@ -200,76 +184,4 @@ def calculate_dashboard_kpis(
     except Exception as e:
         logger.error(f"Erro ao calcular KPIs do dashboard: {e}")
         raise
-
-def calculate_health_distribution(health_scores: Dict, clientes: list) -> Dict[str, int]:
-    """
-    Calcula a distribuição de clientes por categoria de health score.
-    Conta apenas clientes ativos com valor > 0.
     
-    Args:
-        health_scores: Dicionário com health scores dos clientes (indexado por slug)
-        clientes: Lista de clientes com informações de valor
-    
-    Returns:
-        Dict com contagem por categoria: {"Crítico": 0, "Normal": 0, ...}
-    """
-    distribution = {
-        "Crítico": 0,
-        "Normal": 0, 
-        "Saudável": 0,
-        "Campeão": 0
-    }
-    
-    # Criar mapeamento de CNPJ para valor e pipeline
-    clientes_info = {}
-    for cliente in clientes:
-        cnpj = cliente.get('cnpj')
-        valor = cliente.get('valor', 0)
-        pipeline = cliente.get('pipeline', '')
-        
-        # Converter valor para float se necessário
-        if isinstance(valor, Decimal):
-            valor = float(valor)
-        elif valor is None:
-            valor = 0.0
-        
-        # Converter CNPJ para int se necessário
-        if cnpj:
-            try:
-                cnpj = int(cnpj)
-                clientes_info[cnpj] = {
-                    'valor': valor,
-                    'pipeline': pipeline
-                }
-            except (ValueError, TypeError):
-                pass
-    
-    logger.info(f"Mapeamento de clientes: {len(clientes_info)} clientes")
-    
-    # Iterar sobre os health scores (indexados por slug)
-    for slug, data in health_scores.items():
-        if isinstance(data, dict):
-            cnpj = data.get('cnpj')
-            health_level = data.get('categoria', '')
-            
-            # Converter CNPJ para int se necessário
-            if cnpj:
-                try:
-                    cnpj = int(cnpj)
-                except (ValueError, TypeError):
-                    continue
-            
-            # Obter informações do cliente
-            cliente_info = clientes_info.get(cnpj, {})
-            valor_cliente = cliente_info.get('valor', 0)
-            pipeline_cliente = cliente_info.get('pipeline', '')
-
-            # Contar apenas clientes pagantes e que NÃO estão em churn
-            if (health_level in distribution and 
-                pipeline_cliente != "Churns & Cancelamentos"
-                and valor_cliente > 0):
-                
-                distribution[health_level] += 1
-    
-    logger.info(f"Distribuição calculada: {distribution}")
-    return distribution

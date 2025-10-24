@@ -390,7 +390,7 @@ async def get_dashboard(
         # Gerar chave de cache dinâmica baseada nos filtros
         cache_key = f"dashboard:{data_inicio or 'all'}:{data_fim or 'all'}"
         
-        # Verificar cache
+        # Verificar cache do dashboard
         cached = redis.get(cache_key)
         if cached:
             logger.info(f"✅ Cache hit para {cache_key}")
@@ -399,11 +399,14 @@ async def get_dashboard(
         # Se não há cache, buscar dados
         logger.info(f"❌ Cache miss para {cache_key}, buscando dados...")
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(executor, lambda: calculate_dashboard_kpis(data_inicio, data_fim))
+        result = await loop.run_in_executor(
+            executor, 
+            lambda: calculate_dashboard_kpis(data_inicio, data_fim)
+        )
         
-        # Salvar no cache
+        # Salvar dashboard no cache
         redis.set(cache_key, json.dumps(jsonable_encoder(result)), ex=CACHE_TTL_DASHBOARD)
-        logger.info(f"💾 Dados salvos no cache: {cache_key} (TTL: {CACHE_TTL_DASHBOARD}s)")
+        logger.info(f"💾 Dashboard salvo no cache: {cache_key} (TTL: {CACHE_TTL_DASHBOARD}s)")
 
         return result
     except Exception as e:
