@@ -326,13 +326,27 @@ async def get_health_scores(
         if not lock_acquired:
             # Outra thread está processando, aguardar e verificar cache novamente
             logger.info(f"⏳ Aguardando processamento em andamento para {cache_key}...")
-            await asyncio.sleep(0.5)  # Pequeno delay
-            cached = redis.get(cache_key)
-            if cached:
-                logger.info(f"✅ Cache disponível após aguardar: {cache_key}")
-                return json.loads(cached)
-            # Se ainda não tem cache, bloquear e aguardar
+            
+            # Aguardar até 60 segundos verificando o cache periodicamente
+            max_wait = 60
+            wait_interval = 2
+            elapsed = 0
+            
+            while elapsed < max_wait:
+                await asyncio.sleep(wait_interval)
+                elapsed += wait_interval
+                
+                cached = redis.get(cache_key)
+                if cached:
+                    logger.info(f"✅ Cache disponível após aguardar {elapsed}s: {cache_key}")
+                    return json.loads(cached)
+                
+                logger.info(f"⏳ Ainda aguardando... ({elapsed}s/{max_wait}s)")
+            
+            # Após timeout, tentar adquirir o lock bloqueante
+            logger.info(f"⏰ Timeout de espera, tentando adquirir lock...")
             cache_lock.acquire(blocking=True)
+            logger.info(f"🔐 Lock adquirido após timeout")
         
         try:
             # Verificar cache novamente após adquirir lock
@@ -349,11 +363,14 @@ async def get_health_scores(
             # Salvar no cache
             redis.set(cache_key, json.dumps(jsonable_encoder(result)), ex=CACHE_TTL_HEALTH_SCORES)
             logger.info(f"💾 Dados salvos no cache: {cache_key} (TTL: {CACHE_TTL_HEALTH_SCORES}s)")
+            logger.info(f"🔓 Liberando lock para {cache_key}")
             
             return result
         finally:
             # Liberar o lock
-            cache_lock.release()
+            if cache_lock.locked():
+                cache_lock.release()
+                logger.info(f"✅ Lock liberado com sucesso para {cache_key}")
             
     except Exception as e:
         logger.error(f"Erro ao obter health scores: {str(e)}")
