@@ -12,6 +12,10 @@ import pandas as pd
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import logging
 import threading
+import uuid
+import psycopg2
+from .clientes import get_conn as get_psql_conn
+import time
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -543,6 +547,69 @@ def dataframe_to_dict(df: pd.DataFrame) -> Dict:
     logger.info(f"Processamento concluído. {len(resultado)} clientes processados.")
     return resultado
 
+def store_health_scores_in_db(health_scores: Dict):
+    """
+    Armazena os health scores no banco de dados PostgreSQL.
+    
+    Args:
+        health_scores: Dicionário com health scores por slug
+    """
+    conn = None
+    try:
+        conn = get_psql_conn()
+        cursor = conn.cursor()
+        
+        last_update_query = """
+            SELECT TO_CHAR(MAX(snapshot_date), 'YYYY-MM-DD') FROM health_scores_history;
+        """
+        cursor.execute(last_update_query)
+        last_update = cursor.fetchone()[0]
+        
+        if last_update == time.strftime('%Y-%m-%d'):
+            logger.info("Health scores já atualizados hoje. Nenhuma ação necessária.")
+            return
+        
+        for slug, data in health_scores.items():
+            snapshot_id = str(uuid.uuid4())
+            tenant_id = data['tenant_id']
+            score_total = data['scores']['total']
+            score_engajamento = data['scores']['engajamento']
+            score_movimentacao_estoque = data['scores']['estoque']
+            score_crm = data['scores']['crm']
+            score_adoption = data['scores']['adocao']
+            categoria = data['categoria']
+            snapshot_date = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            query = """
+                INSERT INTO health_scores_history (
+                    id, tenant_id, slug, score_total, score_engajamento, 
+                    score_movimentacao_estoque, score_crm, score_adoption, 
+                    categoria, snapshot_date
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE
+                SET 
+                    tenant_id = EXCLUDED.tenant_id,
+                    score_total = EXCLUDED.score_total,
+                    score_engajamento = EXCLUDED.score_engajamento,
+                    score_movimentacao_estoque = EXCLUDED.score_movimentacao_estoque,
+                    score_crm = EXCLUDED.score_crm,
+                    score_adoption = EXCLUDED.score_adoption,
+                    categoria = EXCLUDED.categoria,
+                    snapshot_date = EXCLUDED.snapshot_date,
+                    created_at = NOW();
+            """
+            cursor.execute(query, (snapshot_id, tenant_id, slug, score_total, score_engajamento, score_movimentacao_estoque, score_crm, score_adoption, categoria, snapshot_date))
+
+        conn.commit()
+        logger.info("Health scores armazenados com sucesso no banco de dados.")
+        
+    except Exception as e:
+        logger.error(f"Erro ao armazenar health scores no banco: {e}")
+        
+    finally:
+        if conn:
+            conn.close()
 
 def merge_dataframes(
     data_inicio: Optional[str] = None,
@@ -599,6 +666,8 @@ def merge_dataframes(
     
     # 10. Converter para dicionário estruturado
     resultado = dataframe_to_dict(df_fusao)
+    
+    store_health_scores_in_db(resultado)
     
     return resultado
 
