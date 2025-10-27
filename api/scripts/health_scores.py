@@ -569,6 +569,10 @@ def store_health_scores_in_db(health_scores: Dict):
             logger.info("Health scores já atualizados hoje. Nenhuma ação necessária.")
             return
         
+        # Preparar dados em batch para inserção otimizada
+        snapshot_date = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
+        values_list = []
+        
         for slug, data in health_scores.items():
             snapshot_id = str(uuid.uuid4())
             tenant_id = data['tenant_id']
@@ -578,15 +582,26 @@ def store_health_scores_in_db(health_scores: Dict):
             score_crm = data['scores']['crm']
             score_adoption = data['scores']['adocao']
             categoria = data['categoria']
-            snapshot_date = pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')
             
-            query = """
+            values_list.append((
+                snapshot_id, tenant_id, slug, score_total, score_engajamento,
+                score_movimentacao_estoque, score_crm, score_adoption, categoria, snapshot_date
+            ))
+        
+        # Batch insert usando mogrify para melhor performance
+        if values_list:
+            args_str = ','.join(
+                cursor.mogrify("(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", x).decode('utf-8') 
+                for x in values_list
+            )
+            
+            query = f"""
                 INSERT INTO health_scores_history (
                     id, tenant_id, slug, score_total, score_engajamento, 
                     score_movimentacao_estoque, score_crm, score_adoption, 
                     categoria, snapshot_date
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES {args_str}
                 ON CONFLICT (id) DO UPDATE
                 SET 
                     tenant_id = EXCLUDED.tenant_id,
@@ -599,9 +614,9 @@ def store_health_scores_in_db(health_scores: Dict):
                     snapshot_date = EXCLUDED.snapshot_date,
                     created_at = NOW();
             """
-            cursor.execute(query, (snapshot_id, tenant_id, slug, score_total, score_engajamento, score_movimentacao_estoque, score_crm, score_adoption, categoria, snapshot_date))
-
-        conn.commit()
+            cursor.execute(query)
+            conn.commit()
+            logger.info(f"✅ Batch insert de {len(values_list)} registros concluído")
         logger.info("Health scores armazenados com sucesso no banco de dados.")
         
     except Exception as e:
