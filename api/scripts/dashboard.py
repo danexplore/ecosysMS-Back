@@ -210,7 +210,7 @@ def data_ultima_atualizacao_inadimplentes() -> Optional[str]:
         ultima_atualizacao = cursor.fetchone()[0]
         logger.info(f"Data da última atualização dos inadimplentes: {ultima_atualizacao}")
 
-        return ultima_atualizacao if ultima_atualizacao else None
+        return {'data_atualizacao': ultima_atualizacao} if ultima_atualizacao else None
     except Exception as e:
         logger.error(f"Erro ao obter data da última atualização dos inadimplentes: {e}")
         return None

@@ -292,7 +292,7 @@ async def get_clientes_evolution(
         raise HTTPException(status_code=500, detail=f"Erro ao calcular evolução de clientes: {str(e)}")
     
 @app.get("/clientes/data-atualizacao-inadimplentes", dependencies=[Depends(verify_basic_auth)])
-async def get_data_ultima_atualizacao_inadimplentes() -> Optional[str]:
+async def get_data_ultima_atualizacao_inadimplentes():
     """
     Retorna a data da última atualização dos clientes inadimplentes.
     
