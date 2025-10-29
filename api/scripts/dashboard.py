@@ -3,10 +3,9 @@ import logging
 from typing import Dict, Optional
 from decimal import Decimal
 from datetime import datetime
-from .clientes import fetch_clientes
+from .clientes import fetch_clientes, get_conn
 
 logger = logging.getLogger(__name__)
-
 
 def calculate_dashboard_kpis(
     data_inicio: Optional[str] = None,
@@ -31,7 +30,7 @@ def calculate_dashboard_kpis(
         - mrr_value: float - MRR dos clientes ativos
         - churn_value: float - Valor perdido com churns do período
         - tmo_dias: float - Tempo médio de onboarding em dias
-        - clientes_health: dict - Distribuição por categoria de health score
+        - inadimplentes: int - Clientes inadimplentes no período
     """
     try:
         logger.info(f"Iniciando cálculo de KPIs do dashboard (filtro: {data_inicio} até {data_fim})...")
@@ -52,6 +51,7 @@ def calculate_dashboard_kpis(
         clientes_churn = 0      # Deram churn no período
         mrr_value = 0.0
         churn_value = 0.0
+        inadimplentes = 0
         
         # Para cálculo de TMO
         tempos_onboarding = []
@@ -79,6 +79,7 @@ def calculate_dashboard_kpis(
             data_start_onboarding = cliente.get('data_start_onboarding')
             data_adesao = cliente.get('data_adesao')
             data_cancelamento = cliente.get('data_cancelamento')
+            status_financeiro_cliente = cliente.get('status_financeiro', '')
             
             # Converter valor para float se for Decimal
             if isinstance(valor, Decimal):
@@ -155,6 +156,10 @@ def calculate_dashboard_kpis(
             # Clientes em onboarding: CS | ONBOARDING ou CS | BRADESCO sem data_end_onboarding
             if (pipeline in ["CS | ONBOARDING", "CS | BRADESCO"] and not data_end_onboarding):
                 clientes_onboarding += 1
+            
+            # Contar inadimplentes
+            if status_financeiro_cliente == 'inadimplente':
+                inadimplentes += 1
     
         # Calcular TMO médio
         tmo_dias = round(sum(tempos_onboarding) / len(tempos_onboarding), 1) if tempos_onboarding else 0.0
@@ -166,6 +171,7 @@ def calculate_dashboard_kpis(
         logger.info(f"MRR: R$ {mrr_value:,.2f}")
         logger.info(f"Churn Value: R$ {churn_value:,.2f}")
         logger.info(f"TMO: {tmo_dias} dias (baseado em {len(tempos_onboarding)} clientes)")
+        logger.info(f"Inadimplentes: {inadimplentes}")
                     
         result = {
             "clientes_ativos": clientes_ativos,
@@ -175,7 +181,8 @@ def calculate_dashboard_kpis(
             "clientes_churn": clientes_churn,
             "mrr_value": round(mrr_value, 2),
             "churn_value": round(churn_value, 2),
-            "tmo_dias": tmo_dias
+            "tmo_dias": tmo_dias,
+            "inadimplentes": inadimplentes
         }
         
         logger.info("✅ KPIs do dashboard calculados com sucesso")
@@ -184,4 +191,29 @@ def calculate_dashboard_kpis(
     except Exception as e:
         logger.error(f"Erro ao calcular KPIs do dashboard: {e}")
         raise
+
+def data_ultima_atualizacao_inadimplentes() -> Optional[str]:
+    """
+    Retorna a data da última atualização dos clientes inadimplentes.
     
+    Returns:
+        Data da última atualização no formato string (YYYY-MM-DD) ou None se não disponível.
+    """
+    try:
+        conn = get_conn()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT TO_CHAR(MAX(updated_at), 'DD/MM/YYYY') FROM clientes_inadimplentes
+        """)
+        
+        ultima_atualizacao = cursor.fetchone()[0]
+        logger.info(f"Data da última atualização dos inadimplentes: {ultima_atualizacao}")
+
+        return ultima_atualizacao if ultima_atualizacao else None
+    except Exception as e:
+        logger.error(f"Erro ao obter data da última atualização dos inadimplentes: {e}")
+        return None
+    finally:
+        cursor.close()
+        conn.close()

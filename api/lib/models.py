@@ -1,7 +1,6 @@
 from pydantic import BaseModel
 from typing import Optional, List
 
-
 class Cliente(BaseModel):
     """Modelo Pydantic para clientes vindo do banco."""
     client_id: int

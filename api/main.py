@@ -7,7 +7,7 @@ from fastapi.encoders import jsonable_encoder
 from upstash_redis import Redis
 from .scripts.clientes import fetch_tenant_logins, metricas_clientes
 from .scripts.health_scores import merge_dataframes
-from .scripts.dashboard import calculate_dashboard_kpis
+from .scripts.dashboard import calculate_dashboard_kpis, data_ultima_atualizacao_inadimplentes
 import os
 import warnings
 import json
@@ -290,6 +290,25 @@ async def get_clientes_evolution(
     except Exception as e:
         logger.error(f"Erro ao calcular evolução de clientes: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erro ao calcular evolução de clientes: {str(e)}")
+    
+@app.get("/clientes/data-atualizacao-inadimplentes", dependencies=[Depends(verify_basic_auth)])
+async def get_data_ultima_atualizacao_inadimplentes() -> Optional[str]:
+    """
+    Retorna a data da última atualização dos clientes inadimplentes.
+    
+    Returns:
+        Data da última atualização no formato string (YYYY-MM-DD) ou None se não disponível.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        data_atualizacao = await loop.run_in_executor(
+            executor,
+            lambda: data_ultima_atualizacao_inadimplentes()
+        )
+        return data_atualizacao
+    except Exception as e:
+        logger.error(f"Erro ao obter data de última atualização dos inadimplentes: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Erro ao obter data de última atualização dos inadimplentes: {str(e)}")
 
 @app.get("/health-scores", dependencies=[Depends(verify_basic_auth)])
 async def get_health_scores(
