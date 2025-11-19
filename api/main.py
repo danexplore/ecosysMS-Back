@@ -8,6 +8,7 @@ from upstash_redis import Redis
 from .scripts.clientes import fetch_tenant_logins, metricas_clientes
 from .scripts.health_scores import merge_dataframes
 from .scripts.dashboard import calculate_dashboard_kpis, data_ultima_atualizacao_inadimplentes
+from .scripts.credere import process_clients, check_existing_clients, fetch_existing_clientes
 import os
 import warnings
 import json
@@ -557,3 +558,18 @@ async def get_metricas_clientes():
     except Exception as e:
         logger.error(f"Erro ao buscar métricas dos clientes: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Erro ao buscar métricas dos clientes: {str(e)}")
+
+@app.post("/add-clients-credere", dependencies=[Depends(verify_basic_auth)])
+def add_clients_credere(clients: List[Dict]):
+    results = process_clients(clients)
+    return {"results": results}
+
+@app.get("/all-clients-credere", dependencies=[Depends(verify_basic_auth)])
+def existing_clients_credere():
+    existing_cnpjs = fetch_existing_clientes()
+    return {"all_clients": list(existing_cnpjs)}
+
+@app.get("/existing-clients-credere", dependencies=[Depends(verify_basic_auth)])
+def existing_clients_credere(cnpjs: List[str]):
+    existing_cnpjs = check_existing_clients(cnpjs)
+    return {"existing_cnpjs": list(existing_cnpjs)}
