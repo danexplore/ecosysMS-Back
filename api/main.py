@@ -1,14 +1,25 @@
-# api/main.py - OPTIMIZED
-from fastapi import FastAPI, HTTPException, Depends, Body
+# api/main.py - HIGHLY OPTIMIZED
+from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.encoders import jsonable_encoder
 from upstash_redis import Redis
-from .scripts.clientes import fetch_tenant_logins, metricas_clientes
+from .scripts.clientes import (
+    fetch_tenant_logins, 
+    metricas_clientes, 
+    fetch_clientes, 
+    calculate_clientes_evolution
+)
 from .scripts.health_scores import merge_dataframes
 from .scripts.dashboard import calculate_dashboard_kpis, data_ultima_atualizacao_inadimplentes
-from .scripts.credere import process_clients, check_existing_clients, fetch_existing_clientes
+from .scripts.credere import (
+    process_clients, 
+    check_existing_clients, 
+    fetch_existing_clientes, 
+    process_client,
+    clear_credere_cache
+)
 import os
 import warnings
 import json
@@ -17,559 +28,728 @@ import secrets
 import logging
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
-from functools import wraps
+from functools import wraps, lru_cache
 import hashlib
 import asyncio
 import threading
+import time
+import re
 
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict, List, Optional
-from pydantic import BaseModel
+from typing import Dict, List, Optional, Any, Callable
+from pydantic import BaseModel, Field, validator
 
-# Carregar variáveis de ambiente primeiro
+# ============================================================================
+# CONFIGURAÇÕES E CONSTANTES
+# ============================================================================
+
 load_dotenv()
 
-# Configurar logging
-logging.basicConfig(level=logging.INFO)
+# Logging estruturado
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-# Modelos Pydantic
-class LoginRequest(BaseModel):
-    tenant_id: str
+warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 
-# Parse users from env
-USERS = {}
-users_env = os.getenv("BASIC_AUTH_USERS")
-if users_env:
-    for pair in users_env.split(","):
-        if ":" in pair:
-            user, pwd = pair.split(":", 1)
-            USERS[user.strip()] = pwd.strip()
+# Configurações de cache
+class CacheConfig:
+    CLIENTES = 60 * 60 * 24      # 1 dia
+    HEALTH_SCORES = 60 * 60 * 24 # 1 dia
+    DASHBOARD = 60 * 60 * 24     # 1 dia
+    LOGINS = 60 * 60             # 1 hora
+    METRICAS = 60 * 60 * 24      # 1 dia
+    EVOLUTION = 60 * 60 * 24     # 1 dia
+
+# Thread pool otimizado
+MAX_WORKERS = min(32, (os.cpu_count() or 1) + 4)
+executor = ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="api_worker")
+
+# ============================================================================
+# MODELOS PYDANTIC
+# ============================================================================
+
+class LoginRequest(BaseModel):
+    tenant_id: str = Field(..., min_length=1, description="ID do tenant")
+
+class ClientCredere(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    cnpj: str = Field(..., min_length=10, max_length=18)
+
+class ClientsCredereRequest(BaseModel):
+    clients: List[ClientCredere]
+
+class CNPJCheckRequest(BaseModel):
+    cnpjs: List[str]
+
+class CacheResponse(BaseModel):
+    status: str
+    message: str
+    keys_deleted: int
+
+# ============================================================================
+# AUTENTICAÇÃO
+# ============================================================================
 
 security = HTTPBasic()
 
+@lru_cache(maxsize=1)
+def get_users() -> Dict[str, str]:
+    """Carrega usuários do .env com cache"""
+    users = {}
+    users_env = os.getenv("BASIC_AUTH_USERS")
+    if users_env:
+        for pair in users_env.split(","):
+            if ":" in pair:
+                user, pwd = pair.split(":", 1)
+                users[user.strip()] = pwd.strip()
+    return users
+
 def verify_basic_auth(credentials: HTTPBasicCredentials = Depends(security)):
-    password = USERS.get(credentials.username)
+    """Valida credenciais Basic Auth"""
+    users = get_users()
+    password = users.get(credentials.username)
+    
     if not password or not secrets.compare_digest(credentials.password, password):
-        raise HTTPException(status_code=401, detail="Acesso negado.", headers={"WWW-Authenticate": "Basic"})
+        raise HTTPException(
+            status_code=401, 
+            detail="Credenciais inválidas",
+            headers={"WWW-Authenticate": "Basic"}
+        )
     return credentials
+
+# ============================================================================
+# GERENCIAMENTO DE CACHE E LOCKS
+# ============================================================================
+
+class CacheManager:
+    """Gerenciador centralizado de cache com locks thread-safe"""
+    
+    def __init__(self, redis_client: Redis):
+        self.redis = redis_client
+        self._locks: Dict[str, threading.Lock] = {}
+        self._locks_lock = threading.Lock()
+    
+    def get_lock(self, cache_key: str) -> threading.Lock:
+        """Obtém ou cria um lock para uma chave específica"""
+        with self._locks_lock:
+            if cache_key not in self._locks:
+                self._locks[cache_key] = threading.Lock()
+            return self._locks[cache_key]
+    
+    def get(self, key: str) -> Optional[Any]:
+        """Busca valor do cache com tratamento de erros"""
+        try:
+            cached = self.redis.get(key)
+            if cached:
+                return json.loads(cached) if isinstance(cached, str) else cached
+        except Exception as e:
+            logger.warning(f"⚠️ Erro ao buscar cache {key}: {e}")
+        return None
+    
+    def set(self, key: str, value: Any, ttl: int) -> bool:
+        """Salva valor no cache com tratamento de erros"""
+        try:
+            cache_data = json.dumps(value, ensure_ascii=False)
+            self.redis.set(key, cache_data, ex=ttl)
+            return True
+        except Exception as e:
+            logger.warning(f"⚠️ Erro ao salvar cache {key}: {e}")
+            return False
+    
+    def delete_pattern(self, pattern: str) -> int:
+        """Deleta chaves que correspondem ao padrão"""
+        try:
+            keys = self.redis.keys(pattern)
+            deleted = 0
+            for key in keys:
+                self.redis.delete(key)
+                deleted += 1
+            return deleted
+        except Exception as e:
+            logger.error(f"❌ Erro ao deletar cache {pattern}: {e}")
+            return 0
+    
+    async def get_or_compute(
+        self,
+        cache_key: str,
+        compute_func: Callable,
+        ttl: int,
+        *args,
+        use_lock: bool = False,
+        **kwargs
+    ) -> Any:
+        """Busca no cache ou calcula o valor. Suporta locks para evitar processamento duplicado."""
+        # Tentar buscar do cache
+        cached = self.get(cache_key)
+        if cached:
+            logger.info(f"✅ Cache hit: {cache_key}")
+            return cached
+        
+        logger.info(f"❌ Cache miss: {cache_key}")
+        
+        # Se usar lock, garantir processamento único
+        if use_lock:
+            lock = self.get_lock(cache_key)
+            
+            if not lock.acquire(blocking=False):
+                logger.info(f"⏳ Aguardando processamento: {cache_key}")
+                return await self._wait_for_cache(cache_key, lock, timeout=60)
+            
+            try:
+                # Verificar cache novamente após adquirir lock
+                cached = self.get(cache_key)
+                if cached:
+                    logger.info(f"✅ Cache disponível após lock: {cache_key}")
+                    return cached
+                
+                # Calcular valor
+                result = await self._execute_compute(compute_func, *args, **kwargs)
+                self.set(cache_key, result, ttl)
+                logger.info(f"💾 Cache salvo: {cache_key} (TTL: {ttl}s)")
+                return result
+            finally:
+                lock.release()
+                logger.debug(f"🔓 Lock liberado: {cache_key}")
+        else:
+            # Sem lock, apenas calcular
+            result = await self._execute_compute(compute_func, *args, **kwargs)
+            self.set(cache_key, result, ttl)
+            logger.info(f"💾 Cache salvo: {cache_key} (TTL: {ttl}s)")
+            return result
+    
+    async def _wait_for_cache(self, cache_key: str, lock: threading.Lock, timeout: int = 60) -> Any:
+        """Aguarda cache ficar disponível"""
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            await asyncio.sleep(2)
+            cached = self.get(cache_key)
+            if cached:
+                elapsed = int(time.time() - start_time)
+                logger.info(f"✅ Cache disponível após {elapsed}s: {cache_key}")
+                return cached
+        
+        logger.warning(f"⏰ Timeout aguardando cache: {cache_key}")
+        lock.acquire(blocking=True)
+        return None
+    
+    async def _execute_compute(self, func: Callable, *args, **kwargs) -> Any:
+        """Executa função de forma assíncrona se necessário"""
+        loop = asyncio.get_event_loop()
+        
+        if asyncio.iscoroutinefunction(func):
+            return await func(*args, **kwargs)
+        else:
+            return await loop.run_in_executor(executor, lambda: func(*args, **kwargs))
+
+# ============================================================================
+# INICIALIZAÇÃO DA APLICAÇÃO
+# ============================================================================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Gerencia lifecycle da aplicação"""
     try:
-        logger.info("Iniciando aplicação...")
+        logger.info("🚀 Iniciando aplicação...")
         
-        # Verificar variáveis de ambiente críticas
-        required_env_vars = ["UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN"]
-        missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+        # Validar variáveis de ambiente
+        required_vars = [
+            "UPSTASH_REDIS_REST_URL",
+            "UPSTASH_REDIS_REST_TOKEN",
+            "BASIC_AUTH_USERS"
+        ]
+        missing = [var for var in required_vars if not os.getenv(var)]
         
-        if missing_vars:
-            logger.error(f"Variáveis de ambiente obrigatórias não encontradas: {missing_vars}")
-            raise RuntimeError(f"Variáveis de ambiente obrigatórias não encontradas: {missing_vars}")
-
-        logger.info("Aplicação iniciada com sucesso!")
+        if missing:
+            raise RuntimeError(f"Variáveis obrigatórias ausentes: {missing}")
+        
+        # Testar Redis
+        app.state.redis.ping()
+        logger.info("✅ Redis conectado")
+        
+        # Inicializar cache manager
+        app.state.cache = CacheManager(app.state.redis)
+        logger.info(f"✅ Cache manager inicializado")
+        
+        logger.info(f"✅ Thread pool: {MAX_WORKERS} workers")
+        logger.info("✅ Aplicação pronta!")
+        
         yield
         
     except Exception as e:
-        logger.error(f"Erro durante a inicialização: {str(e)}")
+        logger.error(f"❌ Erro na inicialização: {e}")
         raise
     finally:
-        logger.info("Encerrando aplicação...")
-    
-warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
-if os.getenv("ENVIRONMENT") == "development":
-    load_dotenv()
+        logger.info("🔴 Encerrando aplicação...")
+        executor.shutdown(wait=True)
+        logger.info("✅ Aplicação encerrada")
 
-app = FastAPI(lifespan=lifespan)
+# Criar app FastAPI
+app = FastAPI(
+    title="EcosysMS API",
+    description="API de Gestão de Clientes e Health Scores",
+    version="2.0.0",
+    lifespan=lifespan
+)
 
-# Adicionar middleware de compressão GZIP
+# Inicializar Redis antes do lifespan
+try:
+    redis = Redis.from_env()
+    app.state.redis = redis
+    logger.info("✅ Redis configurado")
+except Exception as e:
+    logger.error(f"❌ Erro ao configurar Redis: {e}")
+    raise
+
+# ============================================================================
+# MIDDLEWARES
+# ============================================================================
+
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Verificar conexão com Redis
-try:
-    redis = Redis.from_env()
-    logger.info("Conexão com Redis estabelecida com sucesso")
-except Exception as e:
-    logger.error(f"Erro ao conectar com Redis: {str(e)}")
-    raise
+@app.middleware("http")
+async def add_process_time_header(request: Request, call_next):
+    """Adiciona tempo de processamento nos headers"""
+    start_time = time.time()
+    response = await call_next(request)
+    process_time = time.time() - start_time
+    response.headers["X-Process-Time"] = f"{process_time:.3f}s"
+    return response
 
-# Thread pool para operações bloqueantes
-executor = ThreadPoolExecutor(max_workers=4)
-
-# Locks para evitar execuções duplicadas simultâneas
-cache_locks = {}
-locks_lock = threading.Lock()
-
-def get_cache_lock(cache_key: str) -> threading.Lock:
-    """Obtém ou cria um lock para uma chave de cache específica"""
-    with locks_lock:
-        if cache_key not in cache_locks:
-            cache_locks[cache_key] = threading.Lock()
-        return cache_locks[cache_key]
-
-# Configurações de cache
-CACHE_TTL_CLIENTES = 60 * 60 * 24  # 1 dia
-CACHE_TTL_HEALTH_SCORES = 60 * 60 * 24  # 1 dia
-CACHE_TTL_DASHBOARD = 60 * 60 * 24  # 1 dia
-
-def cache_key_generator(*args, **kwargs) -> str:
-    """Gera uma chave de cache única baseada nos argumentos"""
-    key_data = str(args) + str(sorted(kwargs.items()))
-    return hashlib.md5(key_data.encode()).hexdigest()
-
-def with_cache(cache_key_prefix: str, ttl: int):
-    """Decorator para adicionar cache a funções assíncronas"""
-    def decorator(func):
-        @wraps(func)
-        async def wrapper(*args, **kwargs):
-            # Gerar chave de cache simples
-            cache_key = f"{cache_key_prefix}:default"
-            
-            # Tentar obter do cache
-            try:
-                cached = redis.get(cache_key)
-                if cached:
-                    logger.info(f"✅ Cache hit para {cache_key_prefix}")
-                    if isinstance(cached, str):
-                        return json.loads(cached)
-                    return cached
-            except Exception as e:
-                logger.warning(f"⚠️ Erro ao acessar cache: {e}")
-            
-            # Executar função original de forma assíncrona
-            logger.info(f"⏳ Cache miss para {cache_key_prefix}, executando função...")
-            
-            # Se a função for síncrona, executar em thread separada
-            loop = asyncio.get_event_loop()
-            if asyncio.iscoroutinefunction(func):
-                result = await func(*args, **kwargs)
-            else:
-                # Extrair a função interna real se for um wrapper
-                inner_func = func
-                result = await loop.run_in_executor(
-                    executor, 
-                    lambda: inner_func(*args, **kwargs)
-                )
-            
-            # Salvar no cache
-            try:
-                cache_data = json.dumps(result, ensure_ascii=False)
-                redis.set(cache_key, cache_data, ex=ttl)
-                logger.info(f"💾 Cache atualizado para {cache_key_prefix}")
-            except Exception as e:
-                logger.warning(f"⚠️ Erro ao salvar cache: {e}")
-            
-            return result
-        return wrapper
-    return decorator
+# ============================================================================
+# ENDPOINTS
+# ============================================================================
 
 @app.get("/")
 async def root():
-    return {"message": "API de Gestão de Clientes está no ar!"}
+    """Endpoint raiz"""
+    return {
+        "message": "EcosysMS API",
+        "version": "2.0.0",
+        "status": "online",
+        "docs": "/docs"
+    }
 
 @app.get("/health")
-async def health_check():
-    """Endpoint de verificação de saúde da aplicação"""
+async def health_check(request: Request):
+    """Health check detalhado"""
     try:
-        # Verificar conexão com Redis
+        redis = request.app.state.redis
         redis.ping()
-        
-        # Verificar variáveis de ambiente
-        env_status = {
-            "UPSTASH_REDIS_REST_URL": bool(os.getenv("UPSTASH_REDIS_REST_URL")),
-            "UPSTASH_REDIS_REST_TOKEN": bool(os.getenv("UPSTASH_REDIS_REST_TOKEN")),
-            "BASIC_AUTH_USERS": bool(os.getenv("BASIC_AUTH_USERS"))
-        }
         
         return {
             "status": "healthy",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "environment": os.getenv("ENVIRONMENT", "production"),
-            "redis_connection": "ok",
-            "env_variables": env_status,
-            "timestamp": datetime.now(timezone.utc).isoformat()
+            "redis": "connected",
+            "workers": MAX_WORKERS,
+            "version": "2.0.0"
         }
     except Exception as e:
-        logger.error(f"Health check falhou: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Health check falhou: {str(e)}")
+        logger.error(f"Health check failed: {e}")
+        raise HTTPException(status_code=503, detail="Service unavailable")
     
 @app.get("/clientes", dependencies=[Depends(verify_basic_auth)])
 async def get_clientes(
+    request: Request,
     data_inicio: Optional[str] = None,
     data_fim: Optional[str] = None
 ):
     """
-    Retorna a lista de clientes em JSON, indexada por client_id.
+    Retorna lista de clientes com filtros opcionais.
     
-    Filtra por data de adesão OU data de cancelamento, permitindo capturar tanto
-    novos clientes quanto churns no mesmo período.
-    
-    Args:
-        data_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
-        data_fim: Data final para filtro (formato: YYYY-MM-DD)
+    - **data_inicio**: Data inicial (YYYY-MM-DD)
+    - **data_fim**: Data final (YYYY-MM-DD)
     """
+    cache_key = f"clientes:{data_inicio or 'all'}:{data_fim or 'all'}"
+    cache: CacheManager = request.app.state.cache
+    
     try:
-        # Gerar chave de cache dinâmica baseada nos filtros
-        cache_key = f"clientes:{data_inicio or 'all'}:{data_fim or 'all'}"
-        
-        # Verificar cache
-        cached = redis.get(cache_key)
-        if cached:
-            logger.info(f"✅ Cache hit para {cache_key}")
-            return json.loads(cached)
-        
-        # Se não há cache, buscar dados
-        logger.info(f"❌ Cache miss para {cache_key}, buscando dados...")
         from .scripts.clientes import fetch_clientes
-        clientes_list = fetch_clientes(data_inicio, data_fim)
         
-        # Converter para formato JSON indexado por client_id
-        clientes_json = {str(c['client_id']): c for c in clientes_list}
+        def compute_clientes():
+            clientes_list = fetch_clientes(data_inicio, data_fim)
+            # Converter para formato indexado já na computação
+            return {str(c['client_id']): c for c in clientes_list}
         
-        # Salvar no cache
-        redis.set(cache_key, json.dumps(jsonable_encoder(clientes_json)), ex=CACHE_TTL_CLIENTES)
-        logger.info(f"💾 Dados salvos no cache: {cache_key} (TTL: {CACHE_TTL_CLIENTES}s)")
+        result = await cache.get_or_compute(
+            cache_key,
+            compute_clientes,
+            CacheConfig.CLIENTES
+        )
         
-        return jsonable_encoder(clientes_json)
+        return jsonable_encoder(result)
+        
     except Exception as e:
-        logger.error(f"Erro ao obter clientes: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Erro ao obter clientes: {str(e)}")
+        logger.error(f"Erro em /clientes: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/clientes/evolution", dependencies=[Depends(verify_basic_auth)])
 async def get_clientes_evolution(
+    request: Request,
     data_inicio: Optional[str] = None,
     data_fim: Optional[str] = None
 ):
-    """
-    Retorna a evolução mensal de clientes pagantes (novos, churns e ativos acumulados).
+    """Retorna evolução mensal de clientes"""
+    cache_key = f"evolution:{data_inicio or 'all'}:{data_fim or 'all'}"
+    cache: CacheManager = request.app.state.cache
     
-    Considera apenas clientes com valor > 0 (pagantes).
-    
-    Args:
-        data_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
-        data_fim: Data final para filtro (formato: YYYY-MM-DD)
-    
-    Returns:
-        Lista com evolução mensal:
-        - mes: string (formato: "jan/2024")
-        - novos_clientes: int (clientes pagantes que aderiram no mês)
-        - churns: int (clientes pagantes que cancelaram no mês)
-        - clientes_ativos: int (total acumulado de clientes pagantes ativos)
-    """
     try:
-        # Gerar chave de cache dinâmica
-        cache_key = f"evolution:{data_inicio or 'all'}:{data_fim or 'all'}"
-        
-        # Verificar cache
-        cached = redis.get(cache_key)
-        if cached:
-            logger.info(f"✅ Cache hit para {cache_key}")
-            return json.loads(cached)
-        
-        # Calcular evolução
-        logger.info(f"❌ Cache miss para {cache_key}, calculando evolução...")
         from .scripts.clientes import calculate_clientes_evolution
         
-        loop = asyncio.get_event_loop()
-        evolution = await loop.run_in_executor(
-            executor, 
-            lambda: calculate_clientes_evolution(data_inicio, data_fim)
+        return await cache.get_or_compute(
+            cache_key,
+            lambda: calculate_clientes_evolution(data_inicio, data_fim),
+            CacheConfig.EVOLUTION
         )
-        
-        # Salvar no cache
-        redis.set(cache_key, json.dumps(evolution), ex=CACHE_TTL_CLIENTES)
-        logger.info(f"💾 Evolução calculada e salva no cache: {len(evolution)} meses")
-        
-        return evolution
-        
     except Exception as e:
-        logger.error(f"Erro ao calcular evolução de clientes: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Erro ao calcular evolução de clientes: {str(e)}")
+        logger.error(f"Erro em /clientes/evolution: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
     
 @app.get("/clientes/data-atualizacao-inadimplentes", dependencies=[Depends(verify_basic_auth)])
-async def get_data_ultima_atualizacao_inadimplentes():
-    """
-    Retorna a data da última atualização dos clientes inadimplentes.
-    
-    Returns:
-        Data da última atualização no formato string (YYYY-MM-DD) ou None se não disponível.
-    """
+async def get_data_ultima_atualizacao_inadimplentes(request: Request):
+    """Retorna data da última atualização de inadimplentes"""
     try:
         loop = asyncio.get_event_loop()
-        data_atualizacao = await loop.run_in_executor(
+        result = await loop.run_in_executor(
             executor,
-            lambda: data_ultima_atualizacao_inadimplentes()
+            data_ultima_atualizacao_inadimplentes
         )
-        return data_atualizacao
+        return result or {"data_atualizacao": None}
     except Exception as e:
-        logger.error(f"Erro ao obter data de última atualização dos inadimplentes: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Erro ao obter data de última atualização dos inadimplentes: {str(e)}")
+        logger.error(f"Erro em /data-atualizacao-inadimplentes: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health-scores", dependencies=[Depends(verify_basic_auth)])
 async def get_health_scores(
+    request: Request,
     data_inicio: Optional[str] = None,
-    data_fim: Optional[str] = None,
-    credentials: HTTPBasicCredentials = Depends(verify_basic_auth)
+    data_fim: Optional[str] = None
 ):
-    """
-    Retorna os health scores dos clientes em JSON, indexados por tenant_id.
+    """Retorna health scores dos clientes"""
+    cache_key = f"health-scores:{data_inicio or 'all'}:{data_fim or 'all'}"
+    cache: CacheManager = request.app.state.cache
     
-    Filtra por data de adesão OU data de cancelamento, permitindo capturar tanto
-    novos clientes quanto churns no mesmo período.
-    
-    Args:
-        data_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
-        data_fim: Data final para filtro (formato: YYYY-MM-DD)
-    """
     try:
-        # Gerar chave de cache dinâmica baseada nos filtros
-        cache_key = f"health-scores:{data_inicio or 'all'}:{data_fim or 'all'}"
-        
-        # Verificar cache
-        cached = redis.get(cache_key)
-        if cached:
-            logger.info(f"✅ Cache hit para {cache_key}")
-            return json.loads(cached)
-        
-        # Usar lock para evitar múltiplas execuções simultâneas
-        cache_lock = get_cache_lock(cache_key)
-        
-        # Tentar adquirir o lock sem bloquear
-        lock_acquired = cache_lock.acquire(blocking=False)
-        
-        if not lock_acquired:
-            # Outra thread está processando, aguardar e verificar cache novamente
-            logger.info(f"⏳ Aguardando processamento em andamento para {cache_key}...")
-            
-            # Aguardar até 60 segundos verificando o cache periodicamente
-            max_wait = 60
-            wait_interval = 2
-            elapsed = 0
-            
-            while elapsed < max_wait:
-                await asyncio.sleep(wait_interval)
-                elapsed += wait_interval
-                
-                cached = redis.get(cache_key)
-                if cached:
-                    logger.info(f"✅ Cache disponível após aguardar {elapsed}s: {cache_key}")
-                    return json.loads(cached)
-                
-                logger.info(f"⏳ Ainda aguardando... ({elapsed}s/{max_wait}s)")
-            
-            # Após timeout, tentar adquirir o lock bloqueante
-            logger.info(f"⏰ Timeout de espera, tentando adquirir lock...")
-            cache_lock.acquire(blocking=True)
-            logger.info(f"🔐 Lock adquirido após timeout")
-        
-        try:
-            # Verificar cache novamente após adquirir lock
-            cached = redis.get(cache_key)
-            if cached:
-                logger.info(f"✅ Cache hit dentro do lock para {cache_key}")
-                return json.loads(cached)
-            
-            # Se não há cache, buscar dados
-            logger.info(f"❌ Cache miss para {cache_key}, buscando dados...")
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(executor, lambda: merge_dataframes(data_inicio, data_fim))
-            
-            # Salvar no cache
-            redis.set(cache_key, json.dumps(jsonable_encoder(result)), ex=CACHE_TTL_HEALTH_SCORES)
-            logger.info(f"💾 Dados salvos no cache: {cache_key} (TTL: {CACHE_TTL_HEALTH_SCORES}s)")
-            logger.info(f"🔓 Liberando lock para {cache_key}")
-            
-            return result
-        finally:
-            # Liberar o lock
-            if cache_lock.locked():
-                cache_lock.release()
-                logger.info(f"✅ Lock liberado com sucesso para {cache_key}")
-            
+        result = await cache.get_or_compute(
+            cache_key,
+            lambda: merge_dataframes(data_inicio, data_fim),
+            CacheConfig.HEALTH_SCORES,
+            use_lock=True  # Lock para evitar cálculo duplicado
+        )
+        return jsonable_encoder(result)
     except Exception as e:
-        logger.error(f"Erro ao obter health scores: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Erro ao obter health scores: {str(e)}")
+        logger.error(f"Erro em /health-scores: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/dashboard", dependencies=[Depends(verify_basic_auth)])
 async def get_dashboard(
+    request: Request,
     data_inicio: Optional[str] = None,
-    data_fim: Optional[str] = None,
-    credentials: HTTPBasicCredentials = Depends(verify_basic_auth)
+    data_fim: Optional[str] = None
 ):
-    """
-    Retorna os principais KPIs do sistema.
+    """Retorna KPIs do dashboard"""
+    cache_key = f"dashboard:{data_inicio or 'all'}:{data_fim or 'all'}"
+    cache: CacheManager = request.app.state.cache
     
-    Filtra por data de adesão OU data de cancelamento, permitindo analisar tanto
-    novos clientes quanto churns no mesmo período.
-    
-    Args:
-        data_inicio: Data inicial para filtro (formato: YYYY-MM-DD)
-        data_fim: Data final para filtro (formato: YYYY-MM-DD)
-    
-    Returns:
-        - clientes_ativos: Total de clientes nas pipelines CS
-        - clientes_pagantes: Clientes ativos com valor > 0
-        - clientes_onboarding: Clientes em onboarding sem data de finalização
-        - novos_clientes: Clientes que aderiram no período (data_adesao)
-        - clientes_churn: Clientes que cancelaram no período (data_cancelamento)
-        - mrr_value: Receita mensal recorrente
-        - churn_value: Valor total de clientes em churn
-        - tmo_dias: Tempo médio de onboarding em dias
-        - clientes_health: Distribuição por categoria de health score
-    """
     try:
-        # Gerar chave de cache dinâmica baseada nos filtros
-        cache_key = f"dashboard:{data_inicio or 'all'}:{data_fim or 'all'}"
-        
-        # Verificar cache do dashboard
-        cached = redis.get(cache_key)
-        if cached:
-            logger.info(f"✅ Cache hit para {cache_key}")
-            return json.loads(cached)
-        
-        # Se não há cache, buscar dados
-        logger.info(f"❌ Cache miss para {cache_key}, buscando dados...")
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            executor, 
-            lambda: calculate_dashboard_kpis(data_inicio, data_fim)
+        result = await cache.get_or_compute(
+            cache_key,
+            lambda: calculate_dashboard_kpis(data_inicio, data_fim),
+            CacheConfig.DASHBOARD
         )
-        
-        # Salvar dashboard no cache
-        redis.set(cache_key, json.dumps(jsonable_encoder(result)), ex=CACHE_TTL_DASHBOARD)
-        logger.info(f"💾 Dashboard salvo no cache: {cache_key} (TTL: {CACHE_TTL_DASHBOARD}s)")
-
-        return result
+        return jsonable_encoder(result)
     except Exception as e:
-        logger.error(f"Erro ao obter dashboard: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Erro ao obter dashboard: {str(e)}")
+        logger.error(f"Erro em /dashboard: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/cache/clear", dependencies=[Depends(verify_basic_auth)])
-async def clear_cache():
-    """Limpa todos os caches da aplicação"""
-    try:      
-        # Buscar todas as chaves de cache
-        clientes = redis.keys('clientes:*')
-        health_scores = redis.keys('health-scores:*')
-        dashboard = redis.keys('dashboard:*')
-        evolution = redis.keys('evolution*')
-        metricas = redis.keys('metricas-clientes')
-
-        keys = [*clientes, *health_scores, *dashboard, *evolution, *metricas]
-        logger.info(f"Limpando {len(keys)} chaves de cache...")
-        print(keys)
-        for key in keys:
-            redis.delete(key)
-            pass
+@app.post("/cache/clear", dependencies=[Depends(verify_basic_auth)], response_model=CacheResponse)
+async def clear_cache(request: Request):
+    """Limpa todo o cache da aplicação"""
+    try:
+        cache: CacheManager = request.app.state.cache
         
-        logger.info("Cache limpo com sucesso")
+        patterns = [
+            'clientes:*',
+            'health-scores:*',
+            'dashboard:*',
+            'evolution:*',
+            'metricas-clientes',
+            'logins:*'
+        ]
+        
+        total_deleted = 0
+        for pattern in patterns:
+            deleted = cache.delete_pattern(pattern)
+            total_deleted += deleted
+            logger.info(f"🗑️ Deletadas {deleted} chaves: {pattern}")
+        
+        return CacheResponse(
+            status="success",
+            message="Cache limpo com sucesso",
+            keys_deleted=total_deleted
+        )
+    except Exception as e:
+        logger.error(f"Erro ao limpar cache: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/cache/stats", dependencies=[Depends(verify_basic_auth)])
+async def cache_stats(request: Request):
+    """Estatísticas do cache"""
+    try:
+        cache: CacheManager = request.app.state.cache
+        
+        patterns = {
+            'clientes': 'clientes:*',
+            'health_scores': 'health-scores:*',
+            'dashboard': 'dashboard:*',
+            'evolution': 'evolution:*',
+            'metricas': 'metricas-clientes',
+            'logins': 'logins:*'
+        }
+        
+        stats = {}
+        for name, pattern in patterns.items():
+            keys = cache.redis.keys(pattern)
+            stats[name] = len(keys)
+        
         return {
-            "status": "success",
-            "message": "Cache será limpo automaticamente no próximo TTL",
-            "note": "Para forçar a atualização, aguarde o TTL expirar ou reinicie a aplicação"
+            "total_keys": sum(stats.values()),
+            "by_type": stats,
+            "timestamp": datetime.now(timezone.utc).isoformat()
         }
     except Exception as e:
-        logger.error(f"Erro ao limpar cache: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Erro ao limpar cache: {str(e)}")
+        logger.error(f"Erro ao obter stats: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/logins", dependencies=[Depends(verify_basic_auth)])
-async def get_logins(tenant_id: str):
-    """
-    Retorna todos os registros de login de um tenant nos últimos 30 dias.
+async def get_logins(request: Request, tenant_id: str):
+    """Retorna logins de um tenant"""
+    cache_key = f"logins:{tenant_id}"
+    cache: CacheManager = request.app.state.cache
     
-    Args:
-        tenant_id: ID do tenant para buscar os logins
-    
-    Returns:
-        JSON com lista de logins e estatísticas
-    """
     try:
-        logger.info(f"Buscando logins para tenant_id: {tenant_id}")
-        
-        # Gerar chave de cache baseada no tenant_id
-        cache_key = f"logins:{tenant_id}"
-        
-        # Verificar cache
-        cached = redis.get(cache_key)
-        if cached:
-            logger.info(f"✅ Cache hit para {cache_key}")
-            return json.loads(cached)
-        
-        # Se não há cache, buscar dados
-        logger.info(f"❌ Cache miss para {cache_key}, buscando dados...")
-        loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            executor,
-            lambda: fetch_tenant_logins(tenant_id)
+        result = await cache.get_or_compute(
+            cache_key,
+            lambda: fetch_tenant_logins(tenant_id),
+            CacheConfig.LOGINS
         )
-        
-        # Salvar no cache (TTL de 1 hora - 3600 segundos)
-        CACHE_TTL_LOGINS = 60 * 60  # 1 hora
-        redis.set(cache_key, json.dumps(jsonable_encoder(result)), ex=CACHE_TTL_LOGINS)
-        logger.info(f"💾 Dados salvos no cache: {cache_key} (TTL: {CACHE_TTL_LOGINS}s)")
-        
-        return result
-        
+        return jsonable_encoder(result)
     except Exception as e:
-        logger.error(f"Erro ao buscar logins: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Erro ao buscar logins: {str(e)}")
-    
+        logger.error(f"Erro em /logins: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/metricas-clientes", dependencies=[Depends(verify_basic_auth)])
-async def get_metricas_clientes():
-    """
-    Retorna todas as métricas dos clientes atuais do banco de dados.
+async def get_metricas_clientes(request: Request):
+    """Retorna métricas agregadas dos clientes"""
+    cache_key = "metricas-clientes"
+    cache: CacheManager = request.app.state.cache
     
-    Returns:
-        Lista de dicionários com as métricas dos clientes.
+    try:
+        result = await cache.get_or_compute(
+            cache_key,
+            metricas_clientes,
+            CacheConfig.METRICAS
+        )
+        return jsonable_encoder(result)
+    except Exception as e:
+        logger.error(f"Erro em /metricas-clientes: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# ENDPOINTS CREDERE
+# ============================================================================
+
+@app.post("/add-client-credere", dependencies=[Depends(verify_basic_auth)])
+async def add_client_credere(client: ClientCredere):
+    """
+    Adiciona um único cliente no sistema Credere.
+    
+    **Request:**
+    ```json
+    {
+        "name": "Empresa ABC Ltda",
+        "cnpj": "44.285.354/0001-03"  // Aceita formatado ou não
+    }
+    ```
+    
+    **Response:**
+    ```json
+    {
+        "success": true,
+        "client_name": "Empresa ABC Ltda",
+        "cnpj": "44285354000103",
+        "store_id": 12345,
+        "insert_message": "✅ Cliente inserido com sucesso",
+        "persist_success": true,
+        "persist_message": "✅ Credenciais persistidas",
+        "already_exists": false
+    }
+    ```
     """
     try:
-        logger.info("Buscando métricas dos clientes atuais")
-        
-        # Gerar chave de cache
-        cache_key = "metricas-clientes"
-        
-        # Verificar cache
-        cached = redis.get(cache_key)
-        if cached:
-            logger.info(f"✅ Cache hit para {cache_key}")
-            return json.loads(cached)
-        
-        # Se não há cache, buscar dados
-        logger.info(f"❌ Cache miss para {cache_key}, buscando dados...")
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             executor,
-            lambda: metricas_clientes()
+            lambda: process_client(client.dict())
         )
-        
-        # Salvar no cache
-        CACHE_TTL_METRICAS = 60 * 60 * 24  # 1 dia
-        redis.set(cache_key, json.dumps(jsonable_encoder(result)), ex=CACHE_TTL_METRICAS)
-        logger.info(f"💾 Dados salvos no cache: {cache_key} (TTL: {CACHE_TTL_METRICAS}s)")
-        
         return result
-        
     except Exception as e:
-        logger.error(f"Erro ao buscar métricas dos clientes: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Erro ao buscar métricas dos clientes: {str(e)}")
+        logger.error(f"Erro ao adicionar cliente: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/add-clients-credere", dependencies=[Depends(verify_basic_auth)])
-def add_clients_credere(clients: List[Dict]):
-    results = process_clients(clients)
-    return {"results": results}
+async def add_clients_credere(request: ClientsCredereRequest):
+    """
+    Adiciona múltiplos clientes no Credere em lote.
+    
+    **Request:**
+    ```json
+    {
+        "clients": [
+            {"name": "Empresa A", "cnpj": "12345678000190"},
+            {"name": "Empresa B", "cnpj": "98.765.432/0001-10"}
+        ]
+    }
+    ```
+    
+    **Response:**
+    ```json
+    {
+        "results": [
+            {
+                "success": true,
+                "client_name": "Empresa A",
+                "store_id": 123,
+                "already_exists": false
+            },
+            {...}
+        ]
+    }
+    ```
+    
+    **Nota:** Clientes já existentes são automaticamente filtrados.
+    """
+    try:
+        clients_dicts = [c.dict() for c in request.clients]
+        loop = asyncio.get_event_loop()
+        results = await loop.run_in_executor(
+            executor,
+            lambda: process_clients(clients_dicts)
+        )
+        return {"results": results}
+    except Exception as e:
+        logger.error(f"Erro ao processar clientes: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/all-clients-credere", dependencies=[Depends(verify_basic_auth)])
-def existing_clients_credere():
-    existing_cnpjs = fetch_existing_clientes()
-    return {"all_clients": list(existing_cnpjs)}
+async def get_all_clients_credere():
+    """
+    Retorna lista de CNPJs de todos os clientes cadastrados no Credere.
+    
+    **Response:**
+    ```json
+    {
+        "all_clients": [
+            "12345678000190",
+            "98765432000110",
+            "44285354000103"
+        ]
+    }
+    ```
+    
+    **Nota:** CNPJs retornados estão normalizados (sem formatação).
+    Os dados são cacheados - use `/credere/cache/clear` para atualizar.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        existing = await loop.run_in_executor(executor, fetch_existing_clientes)
+        return {"all_clients": list(existing.keys())}
+    except Exception as e:
+        logger.error(f"Erro ao buscar clientes: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/existing-clients-credere", dependencies=[Depends(verify_basic_auth)])
-def existing_clients_credere(cnpjs: List[str]):
-    existing_cnpjs = check_existing_clients(cnpjs)
-    return {"existing_cnpjs": list(existing_cnpjs)}
+@app.post("/check-existing-clients-credere", dependencies=[Depends(verify_basic_auth)])
+async def check_existing_clients_credere(request: CNPJCheckRequest):
+    """
+    Verifica quais CNPJs já existem no Credere.
+    
+    **Input:**
+    ```json
+    {
+        "cnpjs": ["08098404000171", "44.285.354/0001-03", "49.796.764/0001-24"]
+    }
+    ```
+    
+    **Output:**
+    ```json
+    {
+        "total": 3,
+        "existing": 2,
+        "not_found": 1,
+        "invalid": 0,
+        "results": [
+            {
+                "cnpj_original": "08098404000171",
+                "cnpj_normalized": "08098404000171",
+                "exists": true,
+                "client_name": "Empresa ABC",
+                "status": "✅ Cliente existe no Credere"
+            },
+            ...
+        ]
+    }
+    ```
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        results = await loop.run_in_executor(
+            executor,
+            lambda: check_existing_clients(request.cnpjs)
+        )
+        
+        # Estatísticas
+        total = len(results)
+        existing = sum(1 for r in results if r['exists'])
+        not_found = sum(1 for r in results if r['valid'] and not r['exists'])
+        invalid = sum(1 for r in results if not r['valid'])
+        
+        return {
+            "total": total,
+            "existing": existing,
+            "not_found": not_found,
+            "invalid": invalid,
+            "results": results
+        }
+    except Exception as e:
+        logger.error(f"Erro ao verificar clientes: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/credere/cache/clear", dependencies=[Depends(verify_basic_auth)])
+async def clear_credere_cache_endpoint():
+    """Limpa o cache de clientes do Credere (força nova busca na API)"""
+    try:
+        clear_credere_cache()
+        return {
+            "status": "success",
+            "message": "Cache do Credere limpo com sucesso",
+            "note": "A próxima requisição buscará dados atualizados da API"
+        }
+    except Exception as e:
+        logger.error(f"Erro ao limpar cache Credere: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# ADMINISTRAÇÃO
+# ============================================================================
