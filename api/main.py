@@ -23,6 +23,7 @@ from .scripts.credere import (
 import os
 import warnings
 import json
+from decimal import Decimal
 from dotenv import load_dotenv
 import secrets
 import logging
@@ -152,7 +153,15 @@ class CacheManager:
     def set(self, key: str, value: Any, ttl: int) -> bool:
         """Salva valor no cache com tratamento de erros"""
         try:
-            cache_data = json.dumps(value, ensure_ascii=False)
+            # Encoder customizado para tipos não serializáveis
+            def json_encoder(obj):
+                if isinstance(obj, Decimal):
+                    return float(obj)
+                if isinstance(obj, datetime):
+                    return obj.isoformat()
+                raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+            
+            cache_data = json.dumps(value, ensure_ascii=False, default=json_encoder)
             self.redis.set(key, cache_data, ex=ttl)
             return True
         except Exception as e:
