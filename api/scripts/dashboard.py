@@ -124,7 +124,7 @@ def calculate_dashboard_kpis(
                         churn_no_periodo = False
                     if data_fim_obj and data_cancelamento_obj > data_fim_obj:
                         churn_no_periodo = False
-                    if churn_no_periodo and status == "CHURNS":
+                    if churn_no_periodo and status in {"CHURNS", "Solicitar cancelamento"}:
                         clientes_churn += 1
                         churn_value += valor  # Somar valor perdido
             
