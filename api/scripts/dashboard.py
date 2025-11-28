@@ -143,7 +143,7 @@ def calculate_dashboard_kpis(
                     logger.warning(f"Erro ao calcular TMO para cliente {cliente.get('client_id')}: {e}")
             
             # Clientes ativos: todas as pipelines CS
-            if pipeline in pipelines_cs_ativas:
+            if pipeline in pipelines_cs_ativas and status not in {"CHURNS", "Solicitar cancelamento"}:
                 clientes_ativos += 1
                 
                 # Somar ao MRR
