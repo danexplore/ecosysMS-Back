@@ -338,3 +338,165 @@ FROM
 ORDER BY 
     ba.mes_adesao ASC
 """
+
+# ============================================================================
+# QUERIES DE VENDAS E COMISSÕES
+# ============================================================================
+
+SELECT_VENDEDORES = """
+-- Query para buscar todos os vendedores ativos
+SELECT
+    id,
+    name,
+    email
+FROM vendedores
+ORDER BY name ASC
+"""
+
+SELECT_CLIENTES_COMISSAO = """
+-- Query para buscar todos os clientes para cálculo de comissão
+-- Considera apenas clientes com valor > 0
+SELECT
+    client_id,
+    nome,
+    vendedor,
+    valor,
+    taxa_setup,
+    status,
+    status_financeiro,
+    parcelas_atrasadas,
+    data_adesao,
+    data_cancelamento,
+    pipeline,
+    meses_ativo
+FROM clientes_atual
+WHERE valor > 0
+ORDER BY data_adesao DESC
+"""
+
+SELECT_CLIENTES_INADIMPLENTES = """
+-- Query para buscar clientes inadimplentes
+-- Considera apenas clientes com valor > 0
+SELECT
+    client_id,
+    nome,
+    vendedor,
+    valor,
+    taxa_setup,
+    status,
+    status_financeiro,
+    parcelas_atrasadas,
+    data_adesao,
+    data_cancelamento,
+    pipeline,
+    meses_ativo
+FROM clientes_atual
+WHERE status_financeiro = 'inadimplente'
+  AND valor > 0
+ORDER BY data_adesao DESC
+"""
+
+SELECT_NOVOS_CLIENTES_MES = """
+-- Query para buscar novos clientes do mês atual
+-- Considera apenas clientes com valor > 0
+SELECT
+    client_id,
+    nome,
+    vendedor,
+    valor,
+    taxa_setup,
+    status,
+    status_financeiro,
+    parcelas_atrasadas,
+    data_adesao,
+    data_cancelamento,
+    pipeline,
+    meses_ativo
+FROM clientes_atual
+WHERE data_adesao >= %s
+  AND valor > 0
+ORDER BY data_adesao DESC
+"""
+
+SELECT_CHURNS_MES = """
+-- Query para buscar churns do mês atual
+-- Considera apenas clientes com valor > 0
+SELECT
+    client_id,
+    nome,
+    vendedor,
+    valor,
+    taxa_setup,
+    status,
+    status_financeiro,
+    parcelas_atrasadas,
+    data_adesao,
+    data_cancelamento,
+    pipeline,
+    meses_ativo
+FROM clientes_atual
+WHERE data_cancelamento >= %s
+  AND valor > 0
+ORDER BY data_cancelamento DESC
+"""
+
+DASHBOARD_VENDAS_METRICS = """
+-- Query para métricas gerais do dashboard de vendas
+WITH metricas AS (
+    SELECT
+        COUNT(*) as total_clientes,
+        COUNT(CASE 
+            WHEN status NOT IN ('churns', 'cancelados', 'solicitar cancelamento')
+            AND COALESCE(pipeline, '') NOT ILIKE '%churns%cancelamentos%'
+            AND COALESCE(status_financeiro, '') != 'inadimplente'
+            THEN 1 
+        END) as clientes_ativos,
+        COUNT(CASE 
+            WHEN status_financeiro = 'inadimplente' 
+            THEN 1 
+        END) as clientes_inadimplentes,
+        COUNT(CASE 
+            WHEN status IN ('churns', 'cancelados', 'solicitar cancelamento')
+            OR pipeline ILIKE '%churns%cancelamentos%'
+            THEN 1 
+        END) as clientes_cancelados,
+        COALESCE(SUM(CASE 
+            WHEN status NOT IN ('churns', 'cancelados', 'solicitar cancelamento')
+            AND COALESCE(pipeline, '') NOT ILIKE '%churns%cancelamentos%'
+            AND COALESCE(status_financeiro, '') != 'inadimplente'
+            THEN valor 
+            ELSE 0 
+        END), 0) as mrr_total,
+        COALESCE(AVG(CASE 
+            WHEN status NOT IN ('churns', 'cancelados', 'solicitar cancelamento')
+            AND COALESCE(pipeline, '') NOT ILIKE '%churns%cancelamentos%'
+            THEN meses_ativo 
+        END), 0) as avg_meses_ativo
+    FROM clientes_atual
+    WHERE valor > 0
+),
+novos_mes AS (
+    SELECT COUNT(*) as novos_mes_atual
+    FROM clientes_atual
+    WHERE data_adesao >= DATE_TRUNC('month', CURRENT_DATE)
+      AND valor > 0
+      AND status NOT IN ('churns', 'cancelados', 'solicitar cancelamento')
+),
+churns_mes AS (
+    SELECT COUNT(*) as churns_mes_atual
+    FROM clientes_atual
+    WHERE data_cancelamento >= DATE_TRUNC('month', CURRENT_DATE)
+      AND valor > 0
+)
+SELECT
+    m.total_clientes,
+    m.clientes_ativos,
+    m.clientes_inadimplentes,
+    m.clientes_cancelados,
+    m.mrr_total,
+    m.avg_meses_ativo,
+    n.novos_mes_atual,
+    c.churns_mes_atual,
+    CASE WHEN m.clientes_ativos > 0 THEN ROUND(m.mrr_total / m.clientes_ativos, 2) ELSE 0 END as ticket_medio
+FROM metricas m, novos_mes n, churns_mes c
+"""

@@ -1,4 +1,3 @@
-# api/main.py - HIGHLY OPTIMIZED
 from fastapi import FastAPI, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -7,18 +6,27 @@ from fastapi.encoders import jsonable_encoder
 from upstash_redis import Redis
 from .scripts.clientes import (
     fetch_tenant_logins, 
-    metricas_clientes, 
-    fetch_clientes, 
-    calculate_clientes_evolution
+    metricas_clientes
 )
 from .scripts.health_scores import merge_dataframes
 from .scripts.dashboard import calculate_dashboard_kpis, data_ultima_atualizacao_inadimplentes
 from .scripts.credere import (
-    process_clients, 
+    process_clients,
     check_existing_clients, 
     fetch_existing_clientes, 
     process_client,
     clear_credere_cache
+)
+from .scripts.vendas import (
+    fetch_resumo_comissoes_por_vendedor,
+    fetch_dashboard_metrics,
+    fetch_ranking_vendedores,
+    get_all_clientes_as_dicts,
+    get_vendedores_as_dicts,
+    get_clientes_by_vendedor_as_dicts,
+    get_inadimplentes_as_dicts,
+    get_novos_clientes_as_dicts,
+    get_churns_as_dicts
 )
 import os
 import warnings
@@ -29,16 +37,14 @@ import secrets
 import logging
 from datetime import datetime, timezone
 from contextlib import asynccontextmanager
-from functools import wraps, lru_cache
-import hashlib
+from functools import lru_cache
 import asyncio
 import threading
 import time
-import re
 
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Any, Callable
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
 
 # ============================================================================
 # CONFIGURAÇÕES E CONSTANTES
@@ -63,6 +69,8 @@ class CacheConfig:
     LOGINS = 60 * 60             # 1 hora
     METRICAS = 60 * 60 * 24      # 1 dia
     EVOLUTION = 60 * 60 * 24     # 1 dia
+    VENDAS = 60 * 60 * 12        # 12 horas
+    VENDEDORES = 60 * 60 * 24    # 1 dia
 
 # Thread pool otimizado
 MAX_WORKERS = min(32, (os.cpu_count() or 1) + 4)
@@ -757,6 +765,350 @@ async def clear_credere_cache_endpoint():
         }
     except Exception as e:
         logger.error(f"Erro ao limpar cache Credere: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ============================================================================
+# ENDPOINTS DE VENDAS E COMISSÕES
+# ============================================================================
+
+@app.get("/vendas/vendedores", dependencies=[Depends(verify_basic_auth)])
+async def get_vendedores(request: Request):
+    """
+    Retorna lista de vendedores ativos.
+    
+    **Response:**
+    ```json
+    [
+        {"id": 12476067, "name": "Amanda Klava", "email": "amanda@email.com"},
+        ...
+    ]
+    ```
+    """
+    cache_key = "vendedores:all"
+    cache: CacheManager = request.app.state.cache
+    
+    try:
+        result = await cache.get_or_compute(
+            cache_key,
+            get_vendedores_as_dicts,
+            CacheConfig.VENDEDORES
+        )
+        return jsonable_encoder(result)
+    except Exception as e:
+        logger.error(f"Erro em /vendas/vendedores: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/vendas/clientes", dependencies=[Depends(verify_basic_auth)])
+async def get_clientes_comissao(request: Request):
+    """
+    Retorna todos os clientes para cálculo de comissão.
+    Considera apenas clientes com valor > 0.
+    
+    **Response:**
+    ```json
+    [
+        {
+            "id": "123",
+            "clientName": "Empresa ABC",
+            "mrr": 299.90,
+            "setupValue": 500.00,
+            "date": "2024-01-15",
+            "status": "ativo",
+            "sellerId": "12476067",
+            "sellerName": "Amanda Klava",
+            "month": "2024-01"
+        },
+        ...
+    ]
+    ```
+    """
+    cache_key = "vendas:clientes:all"
+    cache: CacheManager = request.app.state.cache
+    
+    try:
+        result = await cache.get_or_compute(
+            cache_key,
+            get_all_clientes_as_dicts,
+            CacheConfig.VENDAS
+        )
+        return jsonable_encoder(result)
+    except Exception as e:
+        logger.error(f"Erro em /vendas/clientes: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/vendas/clientes/vendedor/{vendedor_id}", dependencies=[Depends(verify_basic_auth)])
+async def get_clientes_by_vendedor(request: Request, vendedor_id: int):
+    """
+    Retorna clientes de um vendedor específico.
+    
+    **Path Parameters:**
+    - **vendedor_id**: ID do vendedor (use 99999999 para Vendas Antigas)
+    
+    **Response:**
+    ```json
+    [
+        {
+            "id": "123",
+            "clientName": "Empresa ABC",
+            "mrr": 299.90,
+            "status": "ativo",
+            ...
+        },
+        ...
+    ]
+    ```
+    """
+    cache_key = f"vendas:clientes:vendedor:{vendedor_id}"
+    cache: CacheManager = request.app.state.cache
+    
+    try:
+        result = await cache.get_or_compute(
+            cache_key,
+            lambda: get_clientes_by_vendedor_as_dicts(vendedor_id),
+            CacheConfig.VENDAS
+        )
+        return jsonable_encoder(result)
+    except Exception as e:
+        logger.error(f"Erro em /vendas/clientes/vendedor/{vendedor_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/vendas/clientes/inadimplentes", dependencies=[Depends(verify_basic_auth)])
+async def get_clientes_inadimplentes_endpoint(request: Request):
+    """
+    Retorna clientes inadimplentes.
+    Considera apenas clientes com valor > 0.
+    
+    **Response:**
+    ```json
+    [
+        {
+            "id": "123",
+            "clientName": "Empresa ABC",
+            "mrr": 299.90,
+            "status": "inadimplente",
+            ...
+        },
+        ...
+    ]
+    ```
+    """
+    cache_key = "vendas:inadimplentes"
+    cache: CacheManager = request.app.state.cache
+    
+    try:
+        result = await cache.get_or_compute(
+            cache_key,
+            get_inadimplentes_as_dicts,
+            CacheConfig.VENDAS
+        )
+        return jsonable_encoder(result)
+    except Exception as e:
+        logger.error(f"Erro em /vendas/clientes/inadimplentes: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/vendas/clientes/novos", dependencies=[Depends(verify_basic_auth)])
+async def get_novos_clientes_endpoint(request: Request):
+    """
+    Retorna novos clientes do mês atual.
+    Considera apenas clientes com valor > 0.
+    
+    **Response:**
+    ```json
+    [
+        {
+            "id": "123",
+            "clientName": "Empresa ABC",
+            "mrr": 299.90,
+            "date": "2024-12-05",
+            ...
+        },
+        ...
+    ]
+    ```
+    """
+    cache_key = "vendas:novos-mes"
+    cache: CacheManager = request.app.state.cache
+    
+    try:
+        result = await cache.get_or_compute(
+            cache_key,
+            get_novos_clientes_as_dicts,
+            CacheConfig.VENDAS
+        )
+        return jsonable_encoder(result)
+    except Exception as e:
+        logger.error(f"Erro em /vendas/clientes/novos: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/vendas/clientes/churns", dependencies=[Depends(verify_basic_auth)])
+async def get_churns_endpoint(request: Request):
+    """
+    Retorna churns do mês atual.
+    Considera apenas clientes com valor > 0.
+    
+    **Response:**
+    ```json
+    [
+        {
+            "id": "123",
+            "clientName": "Empresa ABC",
+            "mrr": 299.90,
+            "canceledAt": "2024-12-03",
+            ...
+        },
+        ...
+    ]
+    ```
+    """
+    cache_key = "vendas:churns-mes"
+    cache: CacheManager = request.app.state.cache
+    
+    try:
+        result = await cache.get_or_compute(
+            cache_key,
+            get_churns_as_dicts,
+            CacheConfig.VENDAS
+        )
+        return jsonable_encoder(result)
+    except Exception as e:
+        logger.error(f"Erro em /vendas/clientes/churns: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/vendas/resumo-comissoes", dependencies=[Depends(verify_basic_auth)])
+async def get_resumo_comissoes(request: Request):
+    """
+    Retorna resumo de comissões por vendedor.
+    
+    **Response:**
+    ```json
+    [
+        {
+            "vendedor": {"id": 12476067, "name": "Amanda Klava", "email": "..."},
+            "totalClientes": 50,
+            "clientesAtivos": 45,
+            "clientesInadimplentes": 3,
+            "clientesCancelados": 2,
+            "mrrAtivo": 13500.00,
+            "setupTotal": 25000.00
+        },
+        ...
+    ]
+    ```
+    """
+    cache_key = "vendas:resumo-comissoes"
+    cache: CacheManager = request.app.state.cache
+    
+    try:
+        result = await cache.get_or_compute(
+            cache_key,
+            fetch_resumo_comissoes_por_vendedor,
+            CacheConfig.VENDAS
+        )
+        return jsonable_encoder(result)
+    except Exception as e:
+        logger.error(f"Erro em /vendas/resumo-comissoes: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/vendas/dashboard", dependencies=[Depends(verify_basic_auth)])
+async def get_vendas_dashboard(request: Request):
+    """
+    Retorna métricas gerais do dashboard de vendas.
+    
+    **Response:**
+    ```json
+    {
+        "totalClientes": 200,
+        "clientesAtivos": 180,
+        "clientesInadimplentes": 10,
+        "clientesCancelados": 10,
+        "mrrTotal": 54000.00,
+        "ltvTotal": 0,
+        "avgMesesAtivo": 8.5,
+        "novosMesAtual": 15,
+        "churnsMesAtual": 3,
+        "ticketMedio": 300.00
+    }
+    ```
+    """
+    cache_key = "vendas:dashboard-metrics"
+    cache: CacheManager = request.app.state.cache
+    
+    try:
+        result = await cache.get_or_compute(
+            cache_key,
+            fetch_dashboard_metrics,
+            CacheConfig.VENDAS
+        )
+        return jsonable_encoder(result)
+    except Exception as e:
+        logger.error(f"Erro em /vendas/dashboard: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/vendas/ranking", dependencies=[Depends(verify_basic_auth)])
+async def get_ranking_vendedores_endpoint(request: Request):
+    """
+    Retorna ranking de vendedores por MRR ativo.
+    
+    **Response:**
+    ```json
+    [
+        {
+            "vendedor": {"id": 12476067, "name": "Amanda Klava", "email": "..."},
+            "mrrAtivo": 15000.00,
+            "clientesAtivos": 50,
+            "novosMes": 8,
+            "posicao": 1
+        },
+        ...
+    ]
+    ```
+    """
+    cache_key = "vendas:ranking"
+    cache: CacheManager = request.app.state.cache
+    
+    try:
+        result = await cache.get_or_compute(
+            cache_key,
+            fetch_ranking_vendedores,
+            CacheConfig.VENDAS
+        )
+        return jsonable_encoder(result)
+    except Exception as e:
+        logger.error(f"Erro em /vendas/ranking: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/vendas/cache/clear", dependencies=[Depends(verify_basic_auth)], response_model=CacheResponse)
+async def clear_vendas_cache(request: Request):
+    """Limpa o cache de vendas"""
+    try:
+        cache: CacheManager = request.app.state.cache
+        
+        patterns = [
+            'vendedores:*',
+            'vendas:*'
+        ]
+        
+        total_deleted = 0
+        for pattern in patterns:
+            deleted = cache.delete_pattern(pattern)
+            total_deleted += deleted
+            logger.info(f"🗑️ Deletadas {deleted} chaves: {pattern}")
+        
+        return CacheResponse(
+            status="success",
+            message="Cache de vendas limpo com sucesso",
+            keys_deleted=total_deleted
+        )
+    except Exception as e:
+        logger.error(f"Erro ao limpar cache de vendas: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================================================
