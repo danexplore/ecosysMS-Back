@@ -423,6 +423,104 @@
 
 ## 💰 Vendas e Comissões
 
+> **Parâmetro Comum:** Todos os endpoints de vendas (exceto `/vendas/vendedores` e `/vendas/commission-config`) suportam o query parameter `month` no formato `YYYY-MM` para filtrar por mês de adesão.
+
+### `GET /vendas/commission-config`
+**Descrição:** Retorna a configuração atual de comissões (carregada da tabela `commission_config` do Supabase)
+
+**🔒 Autenticação:** Basic Auth
+
+**Response:**
+```json
+{
+    "id": 1,
+    "sales_goal": 10,
+    "mrr_tier1": 5.0,
+    "mrr_tier2": 10.0,
+    "mrr_tier3": 20.0,
+    "setup_tier1": 15.0,
+    "setup_tier2": 25.0,
+    "setup_tier3": 40.0,
+    "mrr_recurrence": [30.0, 20.0, 10.0, 10.0, 10.0, 10.0, 10.0],
+    "updated_at": "2024-12-09T10:00:00"
+}
+```
+
+**Campos:**
+| Campo | Tipo | Descrição |
+|-------|------|-----------|
+| `sales_goal` | int | Meta de vendas para tier máximo |
+| `mrr_tier1` | float | % MRR para 1-5 vendas no mês |
+| `mrr_tier2` | float | % MRR para 6-9 vendas no mês |
+| `mrr_tier3` | float | % MRR para 10+ vendas no mês |
+| `setup_tier1` | float | % Setup para 1-5 vendas no mês |
+| `setup_tier2` | float | % Setup para 6-9 vendas no mês |
+| `setup_tier3` | float | % Setup para 10+ vendas no mês |
+| `mrr_recurrence` | array | Array de % de comissão recorrente por mês |
+
+---
+
+### `PUT /vendas/commission-config`
+**Descrição:** Atualiza a configuração de comissões (apenas campos fornecidos serão atualizados)
+
+**🔒 Autenticação:** Basic Auth
+
+**Request Body (todos campos opcionais):**
+```json
+{
+    "sales_goal": 12,
+    "mrr_tier1": 5.0,
+    "mrr_tier2": 10.0,
+    "mrr_tier3": 20.0,
+    "setup_tier1": 15.0,
+    "setup_tier2": 25.0,
+    "setup_tier3": 40.0,
+    "mrr_recurrence": [30.0, 25.0, 15.0, 10.0, 10.0, 10.0, 10.0]
+}
+```
+
+**Campos do Request:**
+| Campo | Tipo | Obrigatório | Validação | Descrição |
+|-------|------|-------------|-----------|-----------|
+| `sales_goal` | int | ❌ | >= 1 | Meta de vendas para tier máximo |
+| `mrr_tier1` | float | ❌ | 0-100 | % MRR para 1-5 vendas no mês |
+| `mrr_tier2` | float | ❌ | 0-100 | % MRR para 6-9 vendas no mês |
+| `mrr_tier3` | float | ❌ | 0-100 | % MRR para 10+ vendas no mês |
+| `setup_tier1` | float | ❌ | 0-100 | % Setup para 1-5 vendas no mês |
+| `setup_tier2` | float | ❌ | 0-100 | % Setup para 6-9 vendas no mês |
+| `setup_tier3` | float | ❌ | 0-100 | % Setup para 10+ vendas no mês |
+| `mrr_recurrence` | array | ❌ | array de floats | Array de % de comissão recorrente por mês |
+
+**Response:**
+```json
+{
+    "id": 1,
+    "sales_goal": 12,
+    "mrr_tier1": 5.0,
+    "mrr_tier2": 10.0,
+    "mrr_tier3": 20.0,
+    "setup_tier1": 15.0,
+    "setup_tier2": 25.0,
+    "setup_tier3": 40.0,
+    "mrr_recurrence": [30.0, 25.0, 15.0, 10.0, 10.0, 10.0, 10.0],
+    "updated_at": "2024-12-09T15:30:00"
+}
+```
+
+**Exemplo de Uso (atualizar apenas a meta):**
+```bash
+curl -X PUT "https://api.exemplo.com/vendas/commission-config" \
+  -u "usuario:senha" \
+  -H "Content-Type: application/json" \
+  -d '{"sales_goal": 15}'
+```
+
+**Notas:**
+- O cache de configuração é limpo automaticamente após atualização
+- A resposta retorna a configuração completa atualizada
+
+---
+
 ### `GET /vendas/vendedores`
 **Descrição:** Retorna lista de vendedores ativos
 
@@ -451,6 +549,15 @@
 
 **🔒 Autenticação:** Basic Auth
 
+**Query Parameters:**
+| Parâmetro | Tipo | Obrigatório | Descrição |
+|-----------|------|-------------|-----------|
+| `month` | string | ❌ | Mês de adesão (formato: `YYYY-MM`, ex: `2024-01`) |
+
+**Exemplos:**
+- `/vendas/clientes` - Todos os clientes
+- `/vendas/clientes?month=2024-01` - Clientes que aderiram em janeiro/2024
+
 **Response:**
 ```json
 [
@@ -464,10 +571,19 @@
         "sellerId": "12476067",
         "sellerName": "Amanda Klava",
         "canceledAt": null,
-        "month": "2024-01"
+        "month": "2024-01",
+        "mesesAtivo": 11,
+        "parcelasAtrasadas": 0,
+        "mesesComissao": 11,
+        "percentualComissao": 0.05,
+        "valorComissao": 14.99
     }
 ]
 ```
+
+**Cálculo de Comissão:**
+- `mesesComissao` = `mesesAtivo` - `parcelasAtrasadas` (mínimo 0)
+- Percentual baseado na tabela progressiva (ver seção Tabela de Comissões)
 
 ---
 
@@ -481,6 +597,15 @@
 |-----------|------|-----------|
 | `vendedor_id` | integer | ID do vendedor (use 99999999 para Vendas Antigas) |
 
+**Query Parameters:**
+| Parâmetro | Tipo | Obrigatório | Descrição |
+|-----------|------|-------------|-----------|
+| `month` | string | ❌ | Mês de adesão (formato: `YYYY-MM`, ex: `2024-01`) |
+
+**Exemplos:**
+- `/vendas/clientes/vendedor/12476067` - Todos os clientes do vendedor
+- `/vendas/clientes/vendedor/12476067?month=2024-03` - Clientes do vendedor que aderiram em março/2024
+
 **Response:**
 ```json
 [
@@ -493,7 +618,12 @@
         "status": "ativo",
         "sellerId": "12476067",
         "sellerName": "Amanda Klava",
-        "month": "2024-01"
+        "month": "2024-01",
+        "mesesAtivo": 11,
+        "parcelasAtrasadas": 0,
+        "mesesComissao": 11,
+        "percentualComissao": 0.05,
+        "valorComissao": 14.99
     }
 ]
 ```
@@ -504,6 +634,15 @@
 **Descrição:** Retorna clientes inadimplentes (valor > 0)
 
 **🔒 Autenticação:** Basic Auth
+
+**Query Parameters:**
+| Parâmetro | Tipo | Obrigatório | Descrição |
+|-----------|------|-------------|-----------|
+| `month` | string | ❌ | Mês de adesão (formato: `YYYY-MM`, ex: `2024-01`) |
+
+**Exemplos:**
+- `/vendas/clientes/inadimplentes` - Todos os inadimplentes
+- `/vendas/clientes/inadimplentes?month=2024-06` - Inadimplentes que aderiram em junho/2024
 
 **Response:**
 ```json
@@ -525,9 +664,18 @@
 ---
 
 ### `GET /vendas/clientes/novos`
-**Descrição:** Retorna novos clientes do mês atual (valor > 0)
+**Descrição:** Retorna novos clientes do mês
 
 **🔒 Autenticação:** Basic Auth
+
+**Query Parameters:**
+| Parâmetro | Tipo | Obrigatório | Descrição |
+|-----------|------|-------------|-----------|
+| `month` | string | ❌ | Mês de referência (formato: `YYYY-MM`). Se não informado, retorna do mês atual. |
+
+**Exemplos:**
+- `/vendas/clientes/novos` - Novos clientes do mês atual
+- `/vendas/clientes/novos?month=2024-01` - Novos clientes de janeiro/2024
 
 **Response:**
 ```json
@@ -549,9 +697,18 @@
 ---
 
 ### `GET /vendas/clientes/churns`
-**Descrição:** Retorna churns do mês atual (valor > 0)
+**Descrição:** Retorna churns do mês
 
 **🔒 Autenticação:** Basic Auth
+
+**Query Parameters:**
+| Parâmetro | Tipo | Obrigatório | Descrição |
+|-----------|------|-------------|-----------|
+| `month` | string | ❌ | Mês de referência (formato: `YYYY-MM`). Se não informado, retorna do mês atual. |
+
+**Exemplos:**
+- `/vendas/clientes/churns` - Churns do mês atual
+- `/vendas/clientes/churns?month=2024-11` - Churns de novembro/2024
 
 **Response:**
 ```json
@@ -578,6 +735,15 @@
 
 **🔒 Autenticação:** Basic Auth
 
+**Query Parameters:**
+| Parâmetro | Tipo | Obrigatório | Descrição |
+|-----------|------|-------------|-----------|
+| `month` | string | ❌ | Mês de adesão (formato: `YYYY-MM`, ex: `2024-01`) |
+
+**Exemplos:**
+- `/vendas/resumo-comissoes` - Resumo completo de todas as vendas
+- `/vendas/resumo-comissoes?month=2024-01` - Resumo apenas de vendas de janeiro/2024
+
 **Response:**
 ```json
 [
@@ -592,7 +758,8 @@
         "clientesInadimplentes": 3,
         "clientesCancelados": 2,
         "mrrAtivo": 13500.00,
-        "setupTotal": 25000.00
+        "setupTotal": 25000.00,
+        "comissaoTotal": 2450.75
     }
 ]
 ```
@@ -603,6 +770,15 @@
 **Descrição:** Retorna métricas gerais do dashboard de vendas
 
 **🔒 Autenticação:** Basic Auth
+
+**Query Parameters:**
+| Parâmetro | Tipo | Obrigatório | Descrição |
+|-----------|------|-------------|-----------|
+| `month` | string | ❌ | Mês de adesão (formato: `YYYY-MM`, ex: `2024-01`) |
+
+**Exemplos:**
+- `/vendas/dashboard` - Métricas de todas as vendas
+- `/vendas/dashboard?month=2024-03` - Métricas apenas de março/2024
 
 **Response:**
 ```json
@@ -616,7 +792,8 @@
     "avgMesesAtivo": 8.5,
     "novosMesAtual": 15,
     "churnsMesAtual": 3,
-    "ticketMedio": 300.00
+    "ticketMedio": 300.00,
+    "comissaoTotal": 8750.50
 }
 ```
 
@@ -626,6 +803,15 @@
 **Descrição:** Retorna ranking de vendedores por MRR ativo
 
 **🔒 Autenticação:** Basic Auth
+
+**Query Parameters:**
+| Parâmetro | Tipo | Obrigatório | Descrição |
+|-----------|------|-------------|-----------|
+| `month` | string | ❌ | Mês de adesão (formato: `YYYY-MM`, ex: `2024-01`) |
+
+**Exemplos:**
+- `/vendas/ranking` - Ranking geral
+- `/vendas/ranking?month=2024-01` - Ranking apenas de vendas de janeiro/2024
 
 **Response:**
 ```json
@@ -639,7 +825,8 @@
         "mrrAtivo": 15000.00,
         "clientesAtivos": 50,
         "novosMes": 8,
-        "posicao": 1
+        "posicao": 1,
+        "comissaoTotal": 2450.75
     },
     {
         "vendedor": {
@@ -650,7 +837,8 @@
         "mrrAtivo": 12500.00,
         "clientesAtivos": 42,
         "novosMes": 5,
-        "posicao": 2
+        "posicao": 2,
+        "comissaoTotal": 1890.30
     }
 ]
 ```
@@ -746,6 +934,62 @@
 | Jaqueline Matos | 14164336 |
 | Gabriela Lima | 14164332 |
 | Venda Antiga | 99999999 |
+
+---
+
+## 💵 Configuração de Comissões (Banco de Dados)
+
+A configuração de comissões é carregada dinamicamente da tabela `commission_config` do Supabase.
+
+### Estrutura da Tabela
+
+```sql
+CREATE TABLE commission_config (
+  id SERIAL PRIMARY KEY,
+  sales_goal INTEGER DEFAULT 10,           -- Meta de vendas para tier máximo
+  mrr_tier1 DECIMAL(5,2) DEFAULT 5,        -- % MRR para 1-5 vendas
+  mrr_tier2 DECIMAL(5,2) DEFAULT 10,       -- % MRR para 6-9 vendas
+  mrr_tier3 DECIMAL(5,2) DEFAULT 20,       -- % MRR para 10+ vendas
+  setup_tier1 DECIMAL(5,2) DEFAULT 15,     -- % Setup para 1-5 vendas
+  setup_tier2 DECIMAL(5,2) DEFAULT 25,     -- % Setup para 6-9 vendas
+  setup_tier3 DECIMAL(5,2) DEFAULT 40,     -- % Setup para 10+ vendas
+  mrr_recurrence DECIMAL(5,2)[] DEFAULT '{30,20,10,10,10,10,10}',  -- % recorrência por mês
+  updated_at TIMESTAMP DEFAULT NOW()
+);
+```
+
+### Comissão Recorrente (mrr_recurrence)
+
+A comissão recorrente é calculada sobre o MRR do cliente, descontando meses de inadimplência.
+
+**Fórmula:**
+```
+mesesComissao = mesesAtivo - parcelasAtrasadas (mínimo 0)
+percentual = mrr_recurrence[mesesComissao - 1]  // Array 0-indexed
+valorComissao = mrr × (percentual / 100)
+```
+
+**Valores Padrão (mrr_recurrence):**
+| Mês | Percentual | Acumulado |
+|-----|------------|-----------|
+| 1º | 30% | 30% |
+| 2º | 20% | 50% |
+| 3º | 10% | 60% |
+| 4º | 10% | 70% |
+| 5º | 10% | 80% |
+| 6º | 10% | 90% |
+| 7º | 10% | 100% |
+| 8º+ | 0% | 100% |
+
+**Exemplo:**
+- Cliente com MRR R$ 300 e 6 meses ativos com 2 parcelas atrasadas
+- `mesesComissao = 6 - 2 = 4`
+- Percentual do mês 4 = 10% (config.mrr_recurrence[3])
+- `valorComissao = 300 × 0.10 = R$ 30,00`
+
+### Cache
+
+A configuração é cacheada por **1 hora** em memória. Use `POST /vendas/cache/clear` para forçar recarga.
 
 ---
 

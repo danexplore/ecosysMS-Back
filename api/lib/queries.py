@@ -374,6 +374,41 @@ WHERE valor > 0
 ORDER BY data_adesao DESC
 """
 
+SELECT_CLIENTES_COMISSAO_BY_MONTH = """
+-- Query para buscar clientes para cálculo de comissão ATÉ um mês específico
+-- Considera apenas clientes com valor > 0
+-- Parâmetro: mês no formato YYYY-MM (filtra clientes que aderiram até o final deste mês)
+-- Recalcula meses_ativo baseado no final do mês de referência
+SELECT
+    client_id,
+    nome,
+    vendedor,
+    valor,
+    taxa_setup,
+    status,
+    status_financeiro,
+    parcelas_atrasadas,
+    data_adesao,
+    data_cancelamento,
+    pipeline,
+    -- Recalcular meses_ativo até o final do mês de referência
+    GREATEST(
+        0,
+        EXTRACT(YEAR FROM AGE(
+            (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date,
+            data_adesao
+        )) * 12 +
+        EXTRACT(MONTH FROM AGE(
+            (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date,
+            data_adesao
+        ))
+    )::int AS meses_ativo
+FROM clientes_atual
+WHERE valor > 0
+  AND data_adesao <= (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date
+ORDER BY data_adesao DESC
+"""
+
 SELECT_CLIENTES_INADIMPLENTES = """
 -- Query para buscar clientes inadimplentes
 -- Considera apenas clientes com valor > 0
@@ -396,6 +431,40 @@ WHERE status_financeiro = 'inadimplente'
 ORDER BY data_adesao DESC
 """
 
+SELECT_CLIENTES_INADIMPLENTES_BY_MONTH = """
+-- Query para buscar clientes inadimplentes ATÉ um mês específico
+-- Considera apenas clientes com valor > 0
+-- Parâmetro: mês no formato YYYY-MM (filtra clientes que aderiram até o final deste mês)
+SELECT
+    client_id,
+    nome,
+    vendedor,
+    valor,
+    taxa_setup,
+    status,
+    status_financeiro,
+    parcelas_atrasadas,
+    data_adesao,
+    data_cancelamento,
+    pipeline,
+    GREATEST(
+        0,
+        EXTRACT(YEAR FROM AGE(
+            (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date,
+            data_adesao
+        )) * 12 +
+        EXTRACT(MONTH FROM AGE(
+            (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date,
+            data_adesao
+        ))
+    )::int AS meses_ativo
+FROM clientes_atual
+WHERE status_financeiro = 'inadimplente'
+  AND valor > 0
+  AND data_adesao <= (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date
+ORDER BY data_adesao DESC
+"""
+
 SELECT_NOVOS_CLIENTES_MES = """
 -- Query para buscar novos clientes do mês atual
 -- Considera apenas clientes com valor > 0
@@ -414,6 +483,62 @@ SELECT
     meses_ativo
 FROM clientes_atual
 WHERE data_adesao >= %s
+  AND valor > 0
+ORDER BY data_adesao DESC
+"""
+
+SELECT_NOVOS_CLIENTES_BY_MONTH = """
+-- Query para buscar novos clientes ATÉ um mês específico
+-- Considera apenas clientes com valor > 0
+-- Parâmetro: mês no formato YYYY-MM (filtra clientes que aderiram até o final deste mês)
+SELECT
+    client_id,
+    nome,
+    vendedor,
+    valor,
+    taxa_setup,
+    status,
+    status_financeiro,
+    parcelas_atrasadas,
+    data_adesao,
+    data_cancelamento,
+    pipeline,
+    GREATEST(
+        0,
+        EXTRACT(YEAR FROM AGE(
+            (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date,
+            data_adesao
+        )) * 12 +
+        EXTRACT(MONTH FROM AGE(
+            (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date,
+            data_adesao
+        ))
+    )::int AS meses_ativo
+FROM clientes_atual
+WHERE data_adesao <= (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date
+  AND valor > 0
+ORDER BY data_adesao DESC
+"""
+
+SELECT_VENDAS_DO_MES = """
+-- Query para buscar vendas (novos clientes) de um mês específico
+-- Para cálculo de gamificação (tier bronze/prata/ouro)
+-- Parâmetro: mês no formato YYYY-MM (filtra clientes que aderiram NAQUELE mês específico)
+SELECT
+    client_id,
+    nome,
+    vendedor,
+    valor,
+    taxa_setup,
+    status,
+    status_financeiro,
+    parcelas_atrasadas,
+    data_adesao,
+    data_cancelamento,
+    pipeline,
+    meses_ativo
+FROM clientes_atual
+WHERE TO_CHAR(data_adesao, 'YYYY-MM') = %s
   AND valor > 0
 ORDER BY data_adesao DESC
 """
@@ -440,8 +565,41 @@ WHERE data_cancelamento >= %s
 ORDER BY data_cancelamento DESC
 """
 
+SELECT_CHURNS_BY_MONTH = """
+-- Query para buscar churns ATÉ um mês específico
+-- Considera apenas clientes com valor > 0
+-- Parâmetro: mês no formato YYYY-MM (filtra cancelamentos até o final deste mês)
+SELECT
+    client_id,
+    nome,
+    vendedor,
+    valor,
+    taxa_setup,
+    status,
+    status_financeiro,
+    parcelas_atrasadas,
+    data_adesao,
+    data_cancelamento,
+    pipeline,
+    GREATEST(
+        0,
+        EXTRACT(YEAR FROM AGE(
+            (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date,
+            data_adesao
+        )) * 12 +
+        EXTRACT(MONTH FROM AGE(
+            (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date,
+            data_adesao
+        ))
+    )::int AS meses_ativo
+FROM clientes_atual
+WHERE data_cancelamento <= (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date
+  AND valor > 0
+ORDER BY data_cancelamento DESC
+"""
+
 DASHBOARD_VENDAS_METRICS = """
--- Query para métricas gerais do dashboard de vendas
+-- Query para métricas gerais do dashboard de vendas (sem filtro)
 WITH metricas AS (
     SELECT
         COUNT(*) as total_clientes,
@@ -499,4 +657,68 @@ SELECT
     c.churns_mes_atual,
     CASE WHEN m.clientes_ativos > 0 THEN ROUND(m.mrr_total / m.clientes_ativos, 2) ELSE 0 END as ticket_medio
 FROM metricas m, novos_mes n, churns_mes c
+"""
+
+DASHBOARD_VENDAS_METRICS_BY_MONTH = """
+-- Query para métricas do dashboard de vendas ATÉ um mês específico
+-- Parâmetro: mês no formato YYYY-MM (filtra clientes que aderiram ATÉ o final deste mês)
+WITH metricas AS (
+    SELECT
+        COUNT(*) as total_clientes,
+        COUNT(CASE 
+            WHEN status NOT IN ('churns', 'cancelados', 'solicitar cancelamento')
+            AND COALESCE(pipeline, '') NOT ILIKE '%churns%cancelamentos%'
+            AND COALESCE(status_financeiro, '') != 'inadimplente'
+            THEN 1 
+        END) as clientes_ativos,
+        COUNT(CASE 
+            WHEN status_financeiro = 'inadimplente' 
+            THEN 1 
+        END) as clientes_inadimplentes,
+        COUNT(CASE 
+            WHEN status IN ('churns', 'cancelados', 'solicitar cancelamento')
+            OR pipeline ILIKE '%churns%cancelamentos%'
+            THEN 1 
+        END) as clientes_cancelados,
+        COALESCE(SUM(CASE 
+            WHEN status NOT IN ('churns', 'cancelados', 'solicitar cancelamento')
+            AND COALESCE(pipeline, '') NOT ILIKE '%churns%cancelamentos%'
+            AND COALESCE(status_financeiro, '') != 'inadimplente'
+            THEN valor 
+            ELSE 0 
+        END), 0) as mrr_total,
+        COALESCE(SUM(CASE 
+            WHEN status NOT IN ('churns', 'cancelados', 'solicitar cancelamento')
+            AND COALESCE(pipeline, '') NOT ILIKE '%churns%cancelamentos%'
+            AND COALESCE(status_financeiro, '') != 'inadimplente'
+            THEN taxa_setup 
+            ELSE 0 
+        END), 0) as setup_total,
+        COALESCE(AVG(CASE 
+            WHEN status NOT IN ('churns', 'cancelados', 'solicitar cancelamento')
+            AND COALESCE(pipeline, '') NOT ILIKE '%churns%cancelamentos%'
+            THEN meses_ativo 
+        END), 0) as avg_meses_ativo
+    FROM clientes_atual
+    WHERE valor > 0
+      AND data_adesao <= (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date
+),
+churns_mes AS (
+    SELECT COUNT(*) as churns_mes_atual
+    FROM clientes_atual
+    WHERE data_cancelamento <= (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date
+      AND valor > 0
+)
+SELECT
+    m.total_clientes,
+    m.clientes_ativos,
+    m.clientes_inadimplentes,
+    m.clientes_cancelados,
+    m.mrr_total,
+    m.setup_total,
+    m.avg_meses_ativo,
+    m.total_clientes as novos_mes_atual,
+    c.churns_mes_atual,
+    CASE WHEN m.clientes_ativos > 0 THEN ROUND(m.mrr_total / m.clientes_ativos, 2) ELSE 0 END as ticket_medio
+FROM metricas m, churns_mes c
 """

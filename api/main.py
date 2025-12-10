@@ -26,7 +26,11 @@ from .scripts.vendas import (
     get_clientes_by_vendedor_as_dicts,
     get_inadimplentes_as_dicts,
     get_novos_clientes_as_dicts,
-    get_churns_as_dicts
+    get_churns_as_dicts,
+    fetch_commission_config,
+    update_commission_config,
+    clear_commission_config_cache,
+    CommissionConfig
 )
 import os
 import warnings
@@ -97,6 +101,18 @@ class CacheResponse(BaseModel):
     status: str
     message: str
     keys_deleted: int
+
+
+class CommissionConfigUpdate(BaseModel):
+    """Modelo para atualização de configuração de comissões"""
+    sales_goal: Optional[int] = Field(None, ge=1, description="Meta de vendas para tier máximo")
+    mrr_tier1: Optional[float] = Field(None, ge=0, le=100, description="% MRR para 1-5 vendas")
+    mrr_tier2: Optional[float] = Field(None, ge=0, le=100, description="% MRR para 6-9 vendas")
+    mrr_tier3: Optional[float] = Field(None, ge=0, le=100, description="% MRR para 10+ vendas")
+    setup_tier1: Optional[float] = Field(None, ge=0, le=100, description="% Setup para 1-5 vendas")
+    setup_tier2: Optional[float] = Field(None, ge=0, le=100, description="% Setup para 6-9 vendas")
+    setup_tier3: Optional[float] = Field(None, ge=0, le=100, description="% Setup para 10+ vendas")
+    mrr_recurrence: Optional[List[float]] = Field(None, description="Array de % de comissão recorrente por mês")
 
 # ============================================================================
 # AUTENTICAÇÃO
@@ -800,10 +816,13 @@ async def get_vendedores(request: Request):
 
 
 @app.get("/vendas/clientes", dependencies=[Depends(verify_basic_auth)])
-async def get_clientes_comissao(request: Request):
+async def get_clientes_comissao(request: Request, month: Optional[str] = None):
     """
     Retorna todos os clientes para cálculo de comissão.
     Considera apenas clientes com valor > 0.
+    
+    **Query Parameters:**
+    - **month**: (opcional) Mês de referência no formato YYYY-MM (ex: 2024-01)
     
     **Response:**
     ```json
@@ -823,13 +842,13 @@ async def get_clientes_comissao(request: Request):
     ]
     ```
     """
-    cache_key = "vendas:clientes:all"
+    cache_key = f"vendas:clientes:all:{month or 'all'}"
     cache: CacheManager = request.app.state.cache
     
     try:
         result = await cache.get_or_compute(
             cache_key,
-            get_all_clientes_as_dicts,
+            lambda: get_all_clientes_as_dicts(month),
             CacheConfig.VENDAS
         )
         return jsonable_encoder(result)
@@ -839,12 +858,15 @@ async def get_clientes_comissao(request: Request):
 
 
 @app.get("/vendas/clientes/vendedor/{vendedor_id}", dependencies=[Depends(verify_basic_auth)])
-async def get_clientes_by_vendedor(request: Request, vendedor_id: int):
+async def get_clientes_by_vendedor(request: Request, vendedor_id: int, month: Optional[str] = None):
     """
     Retorna clientes de um vendedor específico.
     
     **Path Parameters:**
     - **vendedor_id**: ID do vendedor (use 99999999 para Vendas Antigas)
+    
+    **Query Parameters:**
+    - **month**: (opcional) Mês de referência no formato YYYY-MM (ex: 2024-01)
     
     **Response:**
     ```json
@@ -860,13 +882,13 @@ async def get_clientes_by_vendedor(request: Request, vendedor_id: int):
     ]
     ```
     """
-    cache_key = f"vendas:clientes:vendedor:{vendedor_id}"
+    cache_key = f"vendas:clientes:vendedor:{vendedor_id}:{month or 'all'}"
     cache: CacheManager = request.app.state.cache
     
     try:
         result = await cache.get_or_compute(
             cache_key,
-            lambda: get_clientes_by_vendedor_as_dicts(vendedor_id),
+            lambda: get_clientes_by_vendedor_as_dicts(vendedor_id, month),
             CacheConfig.VENDAS
         )
         return jsonable_encoder(result)
@@ -876,10 +898,13 @@ async def get_clientes_by_vendedor(request: Request, vendedor_id: int):
 
 
 @app.get("/vendas/clientes/inadimplentes", dependencies=[Depends(verify_basic_auth)])
-async def get_clientes_inadimplentes_endpoint(request: Request):
+async def get_clientes_inadimplentes_endpoint(request: Request, month: Optional[str] = None):
     """
     Retorna clientes inadimplentes.
     Considera apenas clientes com valor > 0.
+    
+    **Query Parameters:**
+    - **month**: (opcional) Mês de referência no formato YYYY-MM (ex: 2024-01)
     
     **Response:**
     ```json
@@ -895,13 +920,13 @@ async def get_clientes_inadimplentes_endpoint(request: Request):
     ]
     ```
     """
-    cache_key = "vendas:inadimplentes"
+    cache_key = f"vendas:inadimplentes:{month or 'all'}"
     cache: CacheManager = request.app.state.cache
     
     try:
         result = await cache.get_or_compute(
             cache_key,
-            get_inadimplentes_as_dicts,
+            lambda: get_inadimplentes_as_dicts(month),
             CacheConfig.VENDAS
         )
         return jsonable_encoder(result)
@@ -911,10 +936,13 @@ async def get_clientes_inadimplentes_endpoint(request: Request):
 
 
 @app.get("/vendas/clientes/novos", dependencies=[Depends(verify_basic_auth)])
-async def get_novos_clientes_endpoint(request: Request):
+async def get_novos_clientes_endpoint(request: Request, month: Optional[str] = None):
     """
-    Retorna novos clientes do mês atual.
+    Retorna novos clientes do mês.
     Considera apenas clientes com valor > 0.
+    
+    **Query Parameters:**
+    - **month**: (opcional) Mês de referência no formato YYYY-MM (ex: 2024-01). Se não informado, retorna do mês atual.
     
     **Response:**
     ```json
@@ -930,13 +958,13 @@ async def get_novos_clientes_endpoint(request: Request):
     ]
     ```
     """
-    cache_key = "vendas:novos-mes"
+    cache_key = f"vendas:novos-mes:{month or 'current'}"
     cache: CacheManager = request.app.state.cache
     
     try:
         result = await cache.get_or_compute(
             cache_key,
-            get_novos_clientes_as_dicts,
+            lambda: get_novos_clientes_as_dicts(month),
             CacheConfig.VENDAS
         )
         return jsonable_encoder(result)
@@ -946,10 +974,13 @@ async def get_novos_clientes_endpoint(request: Request):
 
 
 @app.get("/vendas/clientes/churns", dependencies=[Depends(verify_basic_auth)])
-async def get_churns_endpoint(request: Request):
+async def get_churns_endpoint(request: Request, month: Optional[str] = None):
     """
-    Retorna churns do mês atual.
+    Retorna churns do mês.
     Considera apenas clientes com valor > 0.
+    
+    **Query Parameters:**
+    - **month**: (opcional) Mês de referência no formato YYYY-MM (ex: 2024-01). Se não informado, retorna do mês atual.
     
     **Response:**
     ```json
@@ -965,13 +996,13 @@ async def get_churns_endpoint(request: Request):
     ]
     ```
     """
-    cache_key = "vendas:churns-mes"
+    cache_key = f"vendas:churns-mes:{month or 'current'}"
     cache: CacheManager = request.app.state.cache
     
     try:
         result = await cache.get_or_compute(
             cache_key,
-            get_churns_as_dicts,
+            lambda: get_churns_as_dicts(month),
             CacheConfig.VENDAS
         )
         return jsonable_encoder(result)
@@ -981,9 +1012,12 @@ async def get_churns_endpoint(request: Request):
 
 
 @app.get("/vendas/resumo-comissoes", dependencies=[Depends(verify_basic_auth)])
-async def get_resumo_comissoes(request: Request):
+async def get_resumo_comissoes(request: Request, month: Optional[str] = None):
     """
     Retorna resumo de comissões por vendedor.
+    
+    **Query Parameters:**
+    - **month**: (opcional) Mês de referência no formato YYYY-MM (ex: 2024-01)
     
     **Response:**
     ```json
@@ -1001,13 +1035,13 @@ async def get_resumo_comissoes(request: Request):
     ]
     ```
     """
-    cache_key = "vendas:resumo-comissoes"
+    cache_key = f"vendas:resumo-comissoes:{month or 'all'}"
     cache: CacheManager = request.app.state.cache
     
     try:
         result = await cache.get_or_compute(
             cache_key,
-            fetch_resumo_comissoes_por_vendedor,
+            lambda: fetch_resumo_comissoes_por_vendedor(month),
             CacheConfig.VENDAS
         )
         return jsonable_encoder(result)
@@ -1017,9 +1051,12 @@ async def get_resumo_comissoes(request: Request):
 
 
 @app.get("/vendas/dashboard", dependencies=[Depends(verify_basic_auth)])
-async def get_vendas_dashboard(request: Request):
+async def get_vendas_dashboard(request: Request, month: Optional[str] = None):
     """
     Retorna métricas gerais do dashboard de vendas.
+    
+    **Query Parameters:**
+    - **month**: (opcional) Mês de referência no formato YYYY-MM (ex: 2024-01)
     
     **Response:**
     ```json
@@ -1037,13 +1074,13 @@ async def get_vendas_dashboard(request: Request):
     }
     ```
     """
-    cache_key = "vendas:dashboard-metrics"
+    cache_key = f"vendas:dashboard-metrics:{month or 'all'}"
     cache: CacheManager = request.app.state.cache
     
     try:
         result = await cache.get_or_compute(
             cache_key,
-            fetch_dashboard_metrics,
+            lambda: fetch_dashboard_metrics(month),
             CacheConfig.VENDAS
         )
         return jsonable_encoder(result)
@@ -1053,9 +1090,12 @@ async def get_vendas_dashboard(request: Request):
 
 
 @app.get("/vendas/ranking", dependencies=[Depends(verify_basic_auth)])
-async def get_ranking_vendedores_endpoint(request: Request):
+async def get_ranking_vendedores_endpoint(request: Request, month: Optional[str] = None):
     """
     Retorna ranking de vendedores por MRR ativo.
+    
+    **Query Parameters:**
+    - **month**: (opcional) Mês de referência no formato YYYY-MM (ex: 2024-01)
     
     **Response:**
     ```json
@@ -1071,13 +1111,13 @@ async def get_ranking_vendedores_endpoint(request: Request):
     ]
     ```
     """
-    cache_key = "vendas:ranking"
+    cache_key = f"vendas:ranking:{month or 'all'}"
     cache: CacheManager = request.app.state.cache
     
     try:
         result = await cache.get_or_compute(
             cache_key,
-            fetch_ranking_vendedores,
+            lambda: fetch_ranking_vendedores(month),
             CacheConfig.VENDAS
         )
         return jsonable_encoder(result)
@@ -1085,9 +1125,115 @@ async def get_ranking_vendedores_endpoint(request: Request):
         logger.error(f"Erro em /vendas/ranking: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/vendas/commission-config", dependencies=[Depends(verify_basic_auth)])
+async def get_commission_config():
+    """
+    Retorna a configuração atual de comissões.
+    
+    **Response:**
+    ```json
+    {
+        "id": 1,
+        "sales_goal": 10,
+        "mrr_tier1": 5.0,
+        "mrr_tier2": 10.0,
+        "mrr_tier3": 20.0,
+        "setup_tier1": 15.0,
+        "setup_tier2": 25.0,
+        "setup_tier3": 40.0,
+        "mrr_recurrence": [30.0, 20.0, 10.0, 10.0, 10.0, 10.0, 10.0],
+        "updated_at": "2024-12-09T10:00:00"
+    }
+    ```
+    """
+    try:
+        config = fetch_commission_config()
+        return jsonable_encoder({
+            "id": config.id,
+            "sales_goal": config.sales_goal,
+            "mrr_tier1": config.mrr_tier1,
+            "mrr_tier2": config.mrr_tier2,
+            "mrr_tier3": config.mrr_tier3,
+            "setup_tier1": config.setup_tier1,
+            "setup_tier2": config.setup_tier2,
+            "setup_tier3": config.setup_tier3,
+            "mrr_recurrence": config.mrr_recurrence,
+            "updated_at": config.updated_at
+        })
+    except Exception as e:
+        logger.error(f"Erro em /vendas/commission-config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/vendas/commission-config", dependencies=[Depends(verify_basic_auth)])
+async def put_commission_config(config_update: CommissionConfigUpdate):
+    """
+    Atualiza a configuração de comissões.
+    
+    Apenas os campos fornecidos serão atualizados (PATCH semântico).
+    
+    **Request Body:**
+    ```json
+    {
+        "sales_goal": 10,
+        "mrr_tier1": 5.0,
+        "mrr_tier2": 10.0,
+        "mrr_tier3": 20.0,
+        "setup_tier1": 15.0,
+        "setup_tier2": 25.0,
+        "setup_tier3": 40.0,
+        "mrr_recurrence": [30.0, 20.0, 10.0, 10.0, 10.0, 10.0, 10.0]
+    }
+    ```
+    
+    **Response:**
+    ```json
+    {
+        "id": 1,
+        "sales_goal": 10,
+        "mrr_tier1": 5.0,
+        "mrr_tier2": 10.0,
+        "mrr_tier3": 20.0,
+        "setup_tier1": 15.0,
+        "setup_tier2": 25.0,
+        "setup_tier3": 40.0,
+        "mrr_recurrence": [30.0, 20.0, 10.0, 10.0, 10.0, 10.0, 10.0],
+        "updated_at": "2024-12-09T10:00:00"
+    }
+    ```
+    """
+    try:
+        config = update_commission_config(
+            sales_goal=config_update.sales_goal,
+            mrr_tier1=config_update.mrr_tier1,
+            mrr_tier2=config_update.mrr_tier2,
+            mrr_tier3=config_update.mrr_tier3,
+            setup_tier1=config_update.setup_tier1,
+            setup_tier2=config_update.setup_tier2,
+            setup_tier3=config_update.setup_tier3,
+            mrr_recurrence=config_update.mrr_recurrence
+        )
+        return jsonable_encoder({
+            "id": config.id,
+            "sales_goal": config.sales_goal,
+            "mrr_tier1": config.mrr_tier1,
+            "mrr_tier2": config.mrr_tier2,
+            "mrr_tier3": config.mrr_tier3,
+            "setup_tier1": config.setup_tier1,
+            "setup_tier2": config.setup_tier2,
+            "setup_tier3": config.setup_tier3,
+            "mrr_recurrence": config.mrr_recurrence,
+            "updated_at": config.updated_at
+        })
+    except Exception as e:
+        logger.error(f"Erro em PUT /vendas/commission-config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/vendas/cache/clear", dependencies=[Depends(verify_basic_auth)], response_model=CacheResponse)
 async def clear_vendas_cache(request: Request):
-    """Limpa o cache de vendas"""
+    """Limpa o cache de vendas e configuração de comissões"""
     try:
         cache: CacheManager = request.app.state.cache
         
@@ -1102,9 +1248,12 @@ async def clear_vendas_cache(request: Request):
             total_deleted += deleted
             logger.info(f"🗑️ Deletadas {deleted} chaves: {pattern}")
         
+        # Limpar cache de configuração de comissões
+        clear_commission_config_cache()
+        
         return CacheResponse(
             status="success",
-            message="Cache de vendas limpo com sucesso",
+            message="Cache de vendas e configuração de comissões limpo com sucesso",
             keys_deleted=total_deleted
         )
     except Exception as e:
