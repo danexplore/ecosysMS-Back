@@ -356,6 +356,8 @@ ORDER BY name ASC
 SELECT_CLIENTES_COMISSAO = """
 -- Query para buscar todos os clientes para cálculo de comissão
 -- Considera apenas clientes com valor > 0
+-- meses_ativo: calculado como meses de COMISSÃO + 1 (para garantir 1ª comissão paga)
+-- Exemplo: adesão nov/2025, atual dez/2025 → meses_ativo = 2 (garante 1ª comissão)
 SELECT
     client_id,
     nome,
@@ -368,7 +370,12 @@ SELECT
     data_adesao,
     data_cancelamento,
     pipeline,
-    meses_ativo
+    -- Calcular meses de comissão + 1 para garantir primeira comissão
+    GREATEST(
+        1,
+        (EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM data_adesao)) * 12 +
+        (EXTRACT(MONTH FROM CURRENT_DATE) - EXTRACT(MONTH FROM data_adesao)) + 1
+    )::int AS meses_ativo
 FROM clientes_atual
 WHERE valor > 0
 ORDER BY data_adesao DESC
@@ -378,7 +385,8 @@ SELECT_CLIENTES_COMISSAO_BY_MONTH = """
 -- Query para buscar clientes para cálculo de comissão ATÉ um mês específico
 -- Considera apenas clientes com valor > 0
 -- Parâmetro: mês no formato YYYY-MM (filtra clientes que aderiram até o final deste mês)
--- Recalcula meses_ativo baseado no final do mês de referência
+-- meses_ativo: calculado como meses de COMISSÃO + 1 até HOJE
+-- meses_ativo_referencia: calculado até o mês de referência + 1
 SELECT
     client_id,
     nome,
@@ -391,18 +399,18 @@ SELECT
     data_adesao,
     data_cancelamento,
     pipeline,
-    -- Recalcular meses_ativo até o final do mês de referência
+    -- Calcular meses de comissão até HOJE + 1
     GREATEST(
-        0,
-        EXTRACT(YEAR FROM AGE(
-            (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date,
-            data_adesao
-        )) * 12 +
-        EXTRACT(MONTH FROM AGE(
-            (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date,
-            data_adesao
-        ))
-    )::int AS meses_ativo
+        1,
+        (EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM data_adesao)) * 12 +
+        (EXTRACT(MONTH FROM CURRENT_DATE) - EXTRACT(MONTH FROM data_adesao)) + 1
+    )::int AS meses_ativo,
+    -- Calcular meses de comissão até o mês de referência + 1
+    GREATEST(
+        1,
+        (EXTRACT(YEAR FROM TO_DATE(%s, 'YYYY-MM')) - EXTRACT(YEAR FROM data_adesao)) * 12 +
+        (EXTRACT(MONTH FROM TO_DATE(%s, 'YYYY-MM')) - EXTRACT(MONTH FROM data_adesao)) + 1
+    )::int AS meses_ativo_referencia
 FROM clientes_atual
 WHERE valor > 0
   AND data_adesao <= (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date
@@ -424,7 +432,12 @@ SELECT
     data_adesao,
     data_cancelamento,
     pipeline,
-    meses_ativo
+    -- Calcular meses de vigência até HOJE
+    GREATEST(
+        1,
+        (EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM data_adesao)) * 12 +
+        (EXTRACT(MONTH FROM CURRENT_DATE) - EXTRACT(MONTH FROM data_adesao)) + 1
+    )::int AS meses_ativo
 FROM clientes_atual
 WHERE status_financeiro = 'inadimplente'
   AND valor > 0
@@ -447,17 +460,18 @@ SELECT
     data_adesao,
     data_cancelamento,
     pipeline,
+    -- Calcular meses de vigência até HOJE
     GREATEST(
-        0,
-        EXTRACT(YEAR FROM AGE(
-            (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date,
-            data_adesao
-        )) * 12 +
-        EXTRACT(MONTH FROM AGE(
-            (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date,
-            data_adesao
-        ))
-    )::int AS meses_ativo
+        1,
+        (EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM data_adesao)) * 12 +
+        (EXTRACT(MONTH FROM CURRENT_DATE) - EXTRACT(MONTH FROM data_adesao)) + 1
+    )::int AS meses_ativo,
+    -- Calcular meses de vigência até o mês de referência
+    GREATEST(
+        1,
+        (EXTRACT(YEAR FROM TO_DATE(%s, 'YYYY-MM')) - EXTRACT(YEAR FROM data_adesao)) * 12 +
+        (EXTRACT(MONTH FROM TO_DATE(%s, 'YYYY-MM')) - EXTRACT(MONTH FROM data_adesao)) + 1
+    )::int AS meses_ativo_referencia
 FROM clientes_atual
 WHERE status_financeiro = 'inadimplente'
   AND valor > 0
@@ -480,7 +494,12 @@ SELECT
     data_adesao,
     data_cancelamento,
     pipeline,
-    meses_ativo
+    -- Calcular meses de vigência até HOJE
+    GREATEST(
+        1,
+        (EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM data_adesao)) * 12 +
+        (EXTRACT(MONTH FROM CURRENT_DATE) - EXTRACT(MONTH FROM data_adesao)) + 1
+    )::int AS meses_ativo
 FROM clientes_atual
 WHERE data_adesao >= %s
   AND valor > 0
@@ -503,17 +522,18 @@ SELECT
     data_adesao,
     data_cancelamento,
     pipeline,
+    -- Calcular meses de vigência até HOJE
     GREATEST(
-        0,
-        EXTRACT(YEAR FROM AGE(
-            (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date,
-            data_adesao
-        )) * 12 +
-        EXTRACT(MONTH FROM AGE(
-            (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date,
-            data_adesao
-        ))
-    )::int AS meses_ativo
+        1,
+        (EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM data_adesao)) * 12 +
+        (EXTRACT(MONTH FROM CURRENT_DATE) - EXTRACT(MONTH FROM data_adesao)) + 1
+    )::int AS meses_ativo,
+    -- Calcular meses de vigência até o mês de referência
+    GREATEST(
+        1,
+        (EXTRACT(YEAR FROM TO_DATE(%s, 'YYYY-MM')) - EXTRACT(YEAR FROM data_adesao)) * 12 +
+        (EXTRACT(MONTH FROM TO_DATE(%s, 'YYYY-MM')) - EXTRACT(MONTH FROM data_adesao)) + 1
+    )::int AS meses_ativo_referencia
 FROM clientes_atual
 WHERE data_adesao <= (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date
   AND valor > 0
@@ -536,7 +556,12 @@ SELECT
     data_adesao,
     data_cancelamento,
     pipeline,
-    meses_ativo
+    -- Calcular meses de vigência até HOJE
+    GREATEST(
+        1,
+        (EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM data_adesao)) * 12 +
+        (EXTRACT(MONTH FROM CURRENT_DATE) - EXTRACT(MONTH FROM data_adesao)) + 1
+    )::int AS meses_ativo
 FROM clientes_atual
 WHERE TO_CHAR(data_adesao, 'YYYY-MM') = %s
   AND valor > 0
@@ -558,7 +583,12 @@ SELECT
     data_adesao,
     data_cancelamento,
     pipeline,
-    meses_ativo
+    -- Calcular meses de vigência até HOJE
+    GREATEST(
+        1,
+        (EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM data_adesao)) * 12 +
+        (EXTRACT(MONTH FROM CURRENT_DATE) - EXTRACT(MONTH FROM data_adesao)) + 1
+    )::int AS meses_ativo
 FROM clientes_atual
 WHERE data_cancelamento >= %s
   AND valor > 0
@@ -581,17 +611,18 @@ SELECT
     data_adesao,
     data_cancelamento,
     pipeline,
+    -- Calcular meses de vigência até HOJE
     GREATEST(
-        0,
-        EXTRACT(YEAR FROM AGE(
-            (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date,
-            data_adesao
-        )) * 12 +
-        EXTRACT(MONTH FROM AGE(
-            (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date,
-            data_adesao
-        ))
-    )::int AS meses_ativo
+        1,
+        (EXTRACT(YEAR FROM CURRENT_DATE) - EXTRACT(YEAR FROM data_adesao)) * 12 +
+        (EXTRACT(MONTH FROM CURRENT_DATE) - EXTRACT(MONTH FROM data_adesao)) + 1
+    )::int AS meses_ativo,
+    -- Calcular meses de vigência até o mês de referência
+    GREATEST(
+        1,
+        (EXTRACT(YEAR FROM TO_DATE(%s, 'YYYY-MM')) - EXTRACT(YEAR FROM data_adesao)) * 12 +
+        (EXTRACT(MONTH FROM TO_DATE(%s, 'YYYY-MM')) - EXTRACT(MONTH FROM data_adesao)) + 1
+    )::int AS meses_ativo_referencia
 FROM clientes_atual
 WHERE data_cancelamento <= (TO_DATE(%s, 'YYYY-MM') + INTERVAL '1 month - 1 day')::date
   AND valor > 0
@@ -721,4 +752,91 @@ SELECT
     c.churns_mes_atual,
     CASE WHEN m.clientes_ativos > 0 THEN ROUND(m.mrr_total / m.clientes_ativos, 2) ELSE 0 END as ticket_medio
 FROM metricas m, churns_mes c
+"""
+
+# ============================================================================
+# HISTÓRICO DE PAGAMENTOS - BASE PARA CÁLCULO DE COMISSÕES
+# ============================================================================
+
+SELECT_HISTORICO_PAGAMENTOS_POR_CLIENTE = """
+-- Busca histórico de pagamentos por cliente com dados do vendedor
+SELECT 
+    hp.cnpj,
+    hp.loja,
+    hp.vencimento,
+    hp.data_pagamento,
+    hp.parcela,
+    hp.valor,
+    hp.descricao_status,
+    ck.id as cliente_id,
+    ck.nome as cliente_nome,
+    ck.vendedor,
+    ck.data_adesao,
+    ck.data_cancelamento,
+    ck.valor as mrr,
+    ck.taxa_setup
+FROM historico_pagamentos hp
+JOIN companies_kommo co ON co.cnpj = hp.cnpj
+JOIN clientes_kommo ck ON ck.company_id = co.id
+WHERE hp.data_pagamento IS NOT NULL
+ORDER BY hp.cnpj, hp.vencimento
+"""
+
+SELECT_PARCELAS_PAGAS_POR_VENDEDOR = """
+-- Agrupa parcelas pagas por vendedor para cálculo de comissões
+-- O mês de comissão é o mês SEGUINTE ao vencimento da parcela paga
+SELECT 
+    ck.vendedor,
+    ck.id as cliente_id,
+    ck.nome as cliente_nome,
+    ck.data_adesao,
+    ck.data_cancelamento,
+    ck.valor as mrr,
+    ck.taxa_setup,
+    co.cnpj,
+    COUNT(hp.id) as total_parcelas_pagas,
+    ARRAY_AGG(DISTINCT TO_CHAR(hp.vencimento, 'YYYY-MM') ORDER BY TO_CHAR(hp.vencimento, 'YYYY-MM')) as meses_parcelas_pagas,
+    MIN(hp.vencimento) as primeira_parcela_paga,
+    MAX(hp.vencimento) as ultima_parcela_paga
+FROM clientes_kommo ck
+JOIN companies_kommo co ON co.id = ck.company_id
+LEFT JOIN historico_pagamentos hp ON hp.cnpj = co.cnpj AND hp.data_pagamento IS NOT NULL
+WHERE ck.data_adesao IS NOT NULL
+  AND ck.vendedor IS NOT NULL
+  AND ck.vendedor NOT IN ('Não identificado', '')
+GROUP BY ck.vendedor, ck.id, ck.nome, ck.data_adesao, ck.data_cancelamento, ck.valor, ck.taxa_setup, co.cnpj
+ORDER BY ck.vendedor, ck.data_adesao
+"""
+
+SELECT_PARCELAS_PAGAS_POR_MES_COMISSAO = """
+-- Busca parcelas pagas que geram comissão para um mês específico
+-- Mês de comissão = mês seguinte ao vencimento da parcela
+SELECT 
+    ck.vendedor,
+    ck.id as cliente_id,
+    ck.nome as cliente_nome,
+    ck.data_adesao,
+    ck.data_cancelamento,
+    ck.valor as mrr,
+    ck.taxa_setup,
+    co.cnpj,
+    hp.vencimento,
+    hp.data_pagamento,
+    hp.parcela as numero_parcela,
+    -- Calcular posição no ciclo de 7 meses (0-6)
+    -- Mês de comissão é mês seguinte ao vencimento, então posição = meses entre adesão e vencimento
+    EXTRACT(YEAR FROM hp.vencimento) * 12 + EXTRACT(MONTH FROM hp.vencimento) 
+    - (EXTRACT(YEAR FROM ck.data_adesao) * 12 + EXTRACT(MONTH FROM ck.data_adesao)) as posicao_ciclo
+FROM clientes_kommo ck
+JOIN companies_kommo co ON co.id = ck.company_id
+JOIN historico_pagamentos hp ON hp.cnpj = co.cnpj AND hp.data_pagamento IS NOT NULL
+WHERE ck.data_adesao IS NOT NULL
+  AND ck.vendedor IS NOT NULL
+  AND ck.vendedor NOT IN ('Não identificado', '')
+  -- Filtrar parcelas cujo mês de comissão (mês seguinte ao vencimento) é o mês informado
+  AND TO_CHAR(hp.vencimento + INTERVAL '1 month', 'YYYY-MM') = %s
+  -- Limitar ao ciclo de 7 meses (posição 0-6)
+  AND (EXTRACT(YEAR FROM hp.vencimento) * 12 + EXTRACT(MONTH FROM hp.vencimento) 
+       - (EXTRACT(YEAR FROM ck.data_adesao) * 12 + EXTRACT(MONTH FROM ck.data_adesao))) BETWEEN 0 AND 6
+ORDER BY ck.vendedor, ck.data_adesao, hp.vencimento
 """

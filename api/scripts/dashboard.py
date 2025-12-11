@@ -30,7 +30,12 @@ def calculate_dashboard_kpis(
         - mrr_value: float - MRR dos clientes ativos
         - churn_value: float - Valor perdido com churns do período
         - tmo_dias: float - Tempo médio de onboarding em dias
-        - inadimplentes: int - Clientes inadimplentes no período
+        - inadimplentes: int - Clientes inadimplentes (parcelas_atrasadas > 0, excluindo churns)
+    
+    Nota: A contagem de inadimplentes usa a mesma lógica do módulo vendas.py:
+          - Considera parcelas_atrasadas > 0
+          - Exclui clientes com status CHURNS ou "Solicitar cancelamento"
+          - Consistente com o cálculo de comissões
     """
     try:
         logger.info(f"Iniciando cálculo de KPIs do dashboard (filtro: {data_inicio} até {data_fim})...")
@@ -157,8 +162,9 @@ def calculate_dashboard_kpis(
             if (pipeline in ["CS | ONBOARDING", "CS | BRADESCO"] and not data_end_onboarding):
                 clientes_onboarding += 1
             
-            # Contar inadimplentes
-            if status_financeiro_cliente == 'inadimplente':
+            # Contar inadimplentes (usar parcelas_atrasadas para ser consistente com vendas.py)
+            parcelas_atrasadas_cliente = cliente.get('parcelas_atrasadas', 0) or 0
+            if parcelas_atrasadas_cliente > 0 and status not in {"CHURNS", "Solicitar cancelamento"}:
                 inadimplentes += 1
     
         # Calcular TMO médio

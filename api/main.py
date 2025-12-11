@@ -30,7 +30,21 @@ from .scripts.vendas import (
     fetch_commission_config,
     update_commission_config,
     clear_commission_config_cache,
-    CommissionConfig
+    CommissionConfig,
+    fetch_comissoes_por_historico,
+    fetch_parcelas_pagas_por_vendedor,
+)
+from .scripts.inadimplencia import (
+    processar_snapshot_inadimplencia,
+    buscar_comissoes_pendentes,
+    buscar_comissoes_liberadas,
+    buscar_resumo_comissoes,
+    marcar_comissao_perdida,
+    atualizar_comissoes_cliente_regularizado,
+    ClienteInadimplente,
+    ComissaoPendente,
+    ResumoComissoesPendentes,
+    ResultadoProcessamento
 )
 import os
 import warnings
@@ -113,6 +127,38 @@ class CommissionConfigUpdate(BaseModel):
     setup_tier2: Optional[float] = Field(None, ge=0, le=100, description="% Setup para 6-9 vendas")
     setup_tier3: Optional[float] = Field(None, ge=0, le=100, description="% Setup para 10+ vendas")
     mrr_recurrence: Optional[List[float]] = Field(None, description="Array de % de comissão recorrente por mês")
+
+
+# ============================================================================
+# MODELOS PYDANTIC - INADIMPLÊNCIA
+# ============================================================================
+
+class ClienteInadimplenteRequest(BaseModel):
+    """Cliente inadimplente do snapshot semanal"""
+    cnpj: str = Field(..., min_length=11, max_length=20, description="CNPJ do cliente")
+    razao_social: str = Field(..., min_length=1, max_length=255, description="Razão social")
+    parcelas_atrasadas: int = Field(..., ge=1, description="Quantidade de parcelas atrasadas")
+    vendedor_id: Optional[int] = Field(None, description="ID do vendedor responsável")
+    vendedor_nome: Optional[str] = Field(None, description="Nome do vendedor responsável")
+    valor_mrr: float = Field(0.0, ge=0, description="Valor do MRR do cliente")
+    percentual_comissao: float = Field(0.0, ge=0, le=100, description="Percentual de comissão aplicável")
+
+
+class SnapshotInadimplenciaRequest(BaseModel):
+    """Request para processar snapshot semanal de inadimplência"""
+    clientes: List[ClienteInadimplenteRequest] = Field(..., min_length=1, description="Lista de clientes inadimplentes")
+
+
+class RegularizarClienteRequest(BaseModel):
+    """Request para regularizar manualmente um cliente"""
+    cnpj: str = Field(..., min_length=11, max_length=20, description="CNPJ do cliente")
+    parcelas_pagas: int = Field(..., ge=1, description="Quantidade de parcelas regularizadas")
+
+
+class MarcarPerdidaRequest(BaseModel):
+    """Request para marcar comissões como perdidas"""
+    cnpj: str = Field(..., min_length=11, max_length=20, description="CNPJ do cliente")
+    motivo: str = Field("cancelamento", description="Motivo da perda")
 
 # ============================================================================
 # AUTENTICAÇÃO
@@ -1011,6 +1057,55 @@ async def get_churns_endpoint(request: Request, month: Optional[str] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/vendas/comissoes-historico", dependencies=[Depends(verify_basic_auth)])
+async def get_comissoes_por_historico(request: Request, month: str):
+    """
+    Retorna comissões calculadas com base no histórico REAL de pagamentos.
+    
+    Esta é a nova lógica que consulta a tabela historico_pagamentos para 
+    determinar quais parcelas foram efetivamente pagas.
+    
+    **Lógica:**
+    1. Consulta parcelas pagas na tabela historico_pagamentos
+    2. Mês de comissão = mês SEGUINTE ao vencimento da parcela paga
+    3. Se houve churn, só paga comissão das parcelas que foram pagas até o mês do churn
+    
+    **Query Parameters:**
+    - **month**: Mês de referência para comissão no formato YYYY-MM (ex: 2025-07)
+    
+    **Response:**
+    ```json
+    [
+        {
+            "vendedor": "Amanda Klava",
+            "cliente_id": 123,
+            "cliente_nome": "Loja XYZ",
+            "mrr": 399.00,
+            "posicao_ciclo": 0,
+            "percentual_comissao": 0.30,
+            "valor_comissao": 119.70,
+            "vencimento_parcela": "2025-06-15",
+            "mes_comissao": "2025-07"
+        },
+        ...
+    ]
+    ```
+    """
+    cache_key = f"vendas:comissoes-historico:{month}"
+    cache: CacheManager = request.app.state.cache
+    
+    try:
+        result = await cache.get_or_compute(
+            cache_key,
+            lambda: fetch_comissoes_por_historico(month),
+            CacheConfig.VENDAS
+        )
+        return jsonable_encoder(result)
+    except Exception as e:
+        logger.error(f"Erro em /vendas/comissoes-historico: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/vendas/resumo-comissoes", dependencies=[Depends(verify_basic_auth)])
 async def get_resumo_comissoes(request: Request, month: Optional[str] = None):
     """
@@ -1259,6 +1354,404 @@ async def clear_vendas_cache(request: Request):
     except Exception as e:
         logger.error(f"Erro ao limpar cache de vendas: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# ENDPOINTS DE INADIMPLÊNCIA E COMISSÕES PENDENTES
+# ============================================================================
+
+@app.post("/vendas/processar-snapshot-inadimplencia", dependencies=[Depends(verify_basic_auth)])
+async def post_processar_snapshot_inadimplencia(request_data: SnapshotInadimplenciaRequest):
+    """
+    Processa o snapshot semanal de inadimplência.
+    
+    Para cada cliente inadimplente, cria registros de comissão bloqueada
+    na tabela comissoes_pendentes, um para cada parcela atrasada.
+    
+    A função é idempotente: registros existentes são ignorados devido
+    ao constraint UNIQUE(cnpj, mes_referencia).
+    
+    **Request Body:**
+    ```json
+    {
+        "clientes": [
+            {
+                "cnpj": "54776425000116",
+                "razao_social": "Empresa XYZ Ltda",
+                "parcelas_atrasadas": 3,
+                "vendedor_id": 12476067,
+                "vendedor_nome": "Amanda Klava",
+                "valor_mrr": 250.00,
+                "percentual_comissao": 10.0
+            }
+        ]
+    }
+    ```
+    
+    **Response:**
+    ```json
+    {
+        "status": "success",
+        "total_processados": 1,
+        "total_criados": 3,
+        "total_existentes": 0,
+        "resultados": [
+            {
+                "cnpj": "54776425000116",
+                "razao_social": "Empresa XYZ Ltda",
+                "registros_criados": 3,
+                "registros_existentes": 0,
+                "sucesso": true,
+                "erro": null
+            }
+        ]
+    }
+    ```
+    """
+    try:
+        # Converter request para lista de ClienteInadimplente
+        clientes = [
+            ClienteInadimplente(
+                cnpj=c.cnpj,
+                razao_social=c.razao_social,
+                parcelas_atrasadas=c.parcelas_atrasadas,
+                vendedor_id=c.vendedor_id,
+                vendedor_nome=c.vendedor_nome,
+                valor_mrr=c.valor_mrr,
+                percentual_comissao=c.percentual_comissao
+            )
+            for c in request_data.clientes
+        ]
+        
+        # Processar snapshot
+        resultados = processar_snapshot_inadimplencia(clientes)
+        
+        # Calcular totais
+        total_criados = sum(r.registros_criados for r in resultados)
+        total_existentes = sum(r.registros_existentes for r in resultados)
+        
+        return jsonable_encoder({
+            "status": "success",
+            "total_processados": len(resultados),
+            "total_criados": total_criados,
+            "total_existentes": total_existentes,
+            "resultados": [
+                {
+                    "cnpj": r.cnpj,
+                    "razao_social": r.razao_social,
+                    "registros_criados": r.registros_criados,
+                    "registros_existentes": r.registros_existentes,
+                    "sucesso": r.sucesso,
+                    "erro": r.erro
+                }
+                for r in resultados
+            ]
+        })
+        
+    except Exception as e:
+        logger.error(f"Erro em POST /vendas/processar-snapshot-inadimplencia: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/vendas/comissoes-pendentes", dependencies=[Depends(verify_basic_auth)])
+async def get_comissoes_pendentes(
+    vendedor_id: Optional[int] = None,
+    status: Optional[str] = None,
+    limit: int = 100
+):
+    """
+    Busca comissões pendentes (bloqueadas por inadimplência).
+    
+    **Query Parameters:**
+    - `vendedor_id`: ID do vendedor para filtrar (opcional)
+    - `status`: Status para filtrar: bloqueada, paga, perdida (opcional)
+    - `limit`: Limite de registros (default 100)
+    
+    **Response:**
+    ```json
+    {
+        "status": "success",
+        "total": 5,
+        "comissoes": [
+            {
+                "id": "uuid-...",
+                "cnpj": "54776425000116",
+                "razao_social": "Empresa XYZ Ltda",
+                "vendedor_id": 12476067,
+                "vendedor_nome": "Amanda Klava",
+                "mes_referencia": "2025-09-01",
+                "competencia": "09/2025",
+                "parcela_numero": 1,
+                "valor_mrr": 250.00,
+                "percentual_aplicado": 10.0,
+                "valor_comissao": 25.00,
+                "status": "bloqueada",
+                "motivo_bloqueio": "inadimplencia",
+                "data_bloqueio": "2025-12-10T10:00:00",
+                "data_liberacao": null,
+                "dias_bloqueada": 15,
+                "recem_liberada": false
+            }
+        ]
+    }
+    ```
+    """
+    try:
+        comissoes = buscar_comissoes_pendentes(
+            vendedor_id=vendedor_id,
+            status=status,
+            limit=limit
+        )
+        
+        return jsonable_encoder({
+            "status": "success",
+            "total": len(comissoes),
+            "comissoes": [
+                {
+                    "id": c.id,
+                    "cnpj": c.cnpj,
+                    "razao_social": c.razao_social,
+                    "vendedor_id": c.vendedor_id,
+                    "vendedor_nome": c.vendedor_nome,
+                    "mes_referencia": c.mes_referencia,
+                    "competencia": c.competencia,
+                    "parcela_numero": c.parcela_numero,
+                    "valor_mrr": c.valor_mrr,
+                    "percentual_aplicado": c.percentual_aplicado,
+                    "valor_comissao": c.valor_comissao,
+                    "status": c.status,
+                    "motivo_bloqueio": c.motivo_bloqueio,
+                    "data_bloqueio": c.data_bloqueio,
+                    "data_liberacao": c.data_liberacao,
+                    "dias_bloqueada": c.dias_bloqueada,
+                    "recem_liberada": c.recem_liberada
+                }
+                for c in comissoes
+            ]
+        })
+        
+    except Exception as e:
+        logger.error(f"Erro em GET /vendas/comissoes-pendentes: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/vendas/comissoes-liberadas", dependencies=[Depends(verify_basic_auth)])
+async def get_comissoes_liberadas(
+    vendedor_id: Optional[int] = None,
+    mes_liberacao: Optional[str] = None,
+    limit: int = 100
+):
+    """
+    Busca comissões liberadas (pagas via FIFO após regularização).
+    
+    **Query Parameters:**
+    - `vendedor_id`: ID do vendedor para filtrar (opcional)
+    - `mes_liberacao`: Mês de liberação no formato YYYY-MM (opcional)
+    - `limit`: Limite de registros (default 100)
+    
+    **Response:**
+    ```json
+    {
+        "status": "success",
+        "total": 2,
+        "comissoes": [
+            {
+                "id": "uuid-...",
+                "cnpj": "54776425000116",
+                "razao_social": "Empresa XYZ Ltda",
+                "vendedor_id": 12476067,
+                "vendedor_nome": "Amanda Klava",
+                "mes_referencia": "2025-06-01",
+                "competencia": "06/2025",
+                "parcela_numero": 1,
+                "valor_mrr": 250.00,
+                "percentual_aplicado": 10.0,
+                "valor_comissao": 25.00,
+                "status": "paga",
+                "motivo_bloqueio": "inadimplencia",
+                "data_bloqueio": "2025-09-10T10:00:00",
+                "data_liberacao": "10/12/2025",
+                "dias_bloqueada": 0,
+                "recem_liberada": true
+            }
+        ]
+    }
+    ```
+    """
+    try:
+        comissoes = buscar_comissoes_liberadas(
+            vendedor_id=vendedor_id,
+            mes_liberacao=mes_liberacao,
+            limit=limit
+        )
+        
+        return jsonable_encoder({
+            "status": "success",
+            "total": len(comissoes),
+            "comissoes": [
+                {
+                    "id": c.id,
+                    "cnpj": c.cnpj,
+                    "razao_social": c.razao_social,
+                    "vendedor_id": c.vendedor_id,
+                    "vendedor_nome": c.vendedor_nome,
+                    "mes_referencia": c.mes_referencia,
+                    "competencia": c.competencia,
+                    "parcela_numero": c.parcela_numero,
+                    "valor_mrr": c.valor_mrr,
+                    "percentual_aplicado": c.percentual_aplicado,
+                    "valor_comissao": c.valor_comissao,
+                    "status": c.status,
+                    "motivo_bloqueio": c.motivo_bloqueio,
+                    "data_bloqueio": c.data_bloqueio,
+                    "data_liberacao": c.data_liberacao,
+                    "dias_bloqueada": c.dias_bloqueada,
+                    "recem_liberada": c.recem_liberada
+                }
+                for c in comissoes
+            ]
+        })
+        
+    except Exception as e:
+        logger.error(f"Erro em GET /vendas/comissoes-liberadas: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/vendas/comissoes-resumo", dependencies=[Depends(verify_basic_auth)])
+async def get_comissoes_resumo(vendedor_id: Optional[int] = None):
+    """
+    Busca resumo consolidado de comissões pendentes por vendedor.
+    
+    **Query Parameters:**
+    - `vendedor_id`: ID do vendedor para filtrar (opcional)
+    
+    **Response:**
+    ```json
+    {
+        "status": "success",
+        "total": 3,
+        "resumos": [
+            {
+                "vendedor_id": 12476067,
+                "vendedor_nome": "Amanda Klava",
+                "qtd_bloqueadas": 5,
+                "qtd_pagas": 10,
+                "qtd_perdidas": 2,
+                "total_bloqueado": 125.00,
+                "total_pago": 250.00,
+                "pago_mes_atual": 50.00
+            }
+        ]
+    }
+    ```
+    """
+    try:
+        resumos = buscar_resumo_comissoes(vendedor_id=vendedor_id)
+        
+        return jsonable_encoder({
+            "status": "success",
+            "total": len(resumos),
+            "resumos": [
+                {
+                    "vendedor_id": r.vendedor_id,
+                    "vendedor_nome": r.vendedor_nome,
+                    "qtd_bloqueadas": r.qtd_bloqueadas,
+                    "qtd_pagas": r.qtd_pagas,
+                    "qtd_perdidas": r.qtd_perdidas,
+                    "total_bloqueado": r.total_bloqueado,
+                    "total_pago": r.total_pago,
+                    "pago_mes_atual": r.pago_mes_atual
+                }
+                for r in resumos
+            ]
+        })
+        
+    except Exception as e:
+        logger.error(f"Erro em GET /vendas/comissoes-resumo: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/vendas/regularizar-cliente", dependencies=[Depends(verify_basic_auth)])
+async def post_regularizar_cliente(request_data: RegularizarClienteRequest):
+    """
+    Regulariza manualmente um cliente, liberando comissões FIFO.
+    
+    Usar em casos onde o webhook de pagamento não disparou automaticamente.
+    
+    **Request Body:**
+    ```json
+    {
+        "cnpj": "54776425000116",
+        "parcelas_pagas": 2
+    }
+    ```
+    
+    **Response:**
+    ```json
+    {
+        "status": "success",
+        "cnpj": "54776425000116",
+        "comissoes_liberadas": 2
+    }
+    ```
+    """
+    try:
+        liberadas = atualizar_comissoes_cliente_regularizado(
+            cnpj=request_data.cnpj,
+            parcelas_pagas=request_data.parcelas_pagas
+        )
+        
+        return jsonable_encoder({
+            "status": "success",
+            "cnpj": request_data.cnpj,
+            "comissoes_liberadas": liberadas
+        })
+        
+    except Exception as e:
+        logger.error(f"Erro em POST /vendas/regularizar-cliente: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/vendas/marcar-comissao-perdida", dependencies=[Depends(verify_basic_auth)])
+async def post_marcar_comissao_perdida(request_data: MarcarPerdidaRequest):
+    """
+    Marca todas as comissões bloqueadas de um cliente como perdidas.
+    
+    Usar quando o cliente for cancelado definitivamente.
+    
+    **Request Body:**
+    ```json
+    {
+        "cnpj": "54776425000116",
+        "motivo": "cancelamento"
+    }
+    ```
+    
+    **Response:**
+    ```json
+    {
+        "status": "success",
+        "cnpj": "54776425000116",
+        "sucesso": true
+    }
+    ```
+    """
+    try:
+        sucesso = marcar_comissao_perdida(
+            cnpj=request_data.cnpj,
+            motivo=request_data.motivo
+        )
+        
+        return jsonable_encoder({
+            "status": "success" if sucesso else "error",
+            "cnpj": request_data.cnpj,
+            "sucesso": sucesso
+        })
+        
+    except Exception as e:
+        logger.error(f"Erro em POST /vendas/marcar-comissao-perdida: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # ============================================================================
 # ADMINISTRAÇÃO
