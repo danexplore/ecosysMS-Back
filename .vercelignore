@@ -4,7 +4,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
-venv/
+.venv/
 env/
 ENV/
 *.egg-info/
@@ -40,3 +40,13 @@ htmlcov/
 
 # Notebooks
 *.ipynb
+
+.env
+.vscode
+.venv
+*__pycache__*
+testes.*
+teste*
+*xlsx
+
+null_tenants*
