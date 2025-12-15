@@ -3,7 +3,7 @@ import os
 from dotenv import load_dotenv
 import json
 import datetime
-from ..lib.queries import SELECT_CLIENTES, LOGINS_BY_TENANT, METRICAS_CLIENTES
+from ..lib.queries import SELECT_CLIENTES, LOGINS_BY_TENANT, METRICAS_CLIENTES, SELECT_CS_USERS
 from ..lib.models import Cliente
 from typing import Dict, Optional, List
 import logging
@@ -368,6 +368,39 @@ def calculate_clientes_evolution(
     
     logger.info(f"✅ Evolução calculada: {len(evolution)} meses")
     return evolution
+
+def fetch_cs_users() -> List[Dict]:
+    """
+    Busca os e-mails dos usuários CS no banco de dados PostgreSQL.
+    
+    Returns:
+        Lista de dicionários com dados dos CS's (id, name, email)
+    """
+    conn = get_conn()
+    
+    try:
+        cur = conn.cursor()
+        cur.execute(SELECT_CS_USERS)
+        cs_users = cur.fetchall()
+        columns = [desc[0] for desc in cur.description]
+        cur.close()
+        
+        # Converter para lista de dicionários
+        results = []
+        for user in cs_users:
+            user_data = dict(zip(columns, user))
+            results.append(user_data)
+        
+        logger.info(f"✅ Encontrados {len(results)} usuários CS")
+        
+        return results
+        
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar CS users: {e}")
+        raise
+    finally:
+        if conn:
+            conn.close()
 
 def metricas_clientes() -> List[Dict]:
     """

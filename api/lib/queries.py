@@ -840,3 +840,14 @@ WHERE ck.data_adesao IS NOT NULL
        - (EXTRACT(YEAR FROM ck.data_adesao) * 12 + EXTRACT(MONTH FROM ck.data_adesao))) BETWEEN 0 AND 6
 ORDER BY ck.vendedor, ck.data_adesao, hp.vencimento
 """
+
+SELECT_CS_USERS = """
+-- Query para buscar e-mails dos CS's específicos
+SELECT 
+    id,
+    name,
+    email
+FROM users 
+WHERE id IN (13090515, 13393851, 13406671, 13480695)
+ORDER BY name
+"""

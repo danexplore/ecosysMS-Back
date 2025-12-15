@@ -6,7 +6,8 @@ from fastapi.encoders import jsonable_encoder
 from upstash_redis import Redis
 from .scripts.clientes import (
     fetch_tenant_logins, 
-    metricas_clientes
+    metricas_clientes,
+    fetch_cs_users
 )
 from .scripts.health_scores import merge_dataframes
 from .scripts.dashboard import calculate_dashboard_kpis, data_ultima_atualizacao_inadimplentes
@@ -644,6 +645,33 @@ async def get_metricas_clientes(request: Request):
         return jsonable_encoder(result)
     except Exception as e:
         logger.error(f"Erro em /metricas-clientes: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/cs-users", dependencies=[Depends(verify_basic_auth)])
+async def get_cs_users():
+    """
+    Retorna lista de usuários CS com seus e-mails.
+    
+    **Response:**
+    ```json
+    [
+        {
+            "id": 13090515,
+            "name": "Nome do CS",
+            "email": "cs@ecosysauto.com.br"
+        }
+    ]
+    ```
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            executor,
+            fetch_cs_users
+        )
+        return jsonable_encoder(result)
+    except Exception as e:
+        logger.error(f"Erro em /cs-users: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================================================
