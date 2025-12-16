@@ -517,7 +517,7 @@ async def get_health_scores(
     data_inicio: Optional[str] = None,
     data_fim: Optional[str] = None
 ):
-    """Retorna health scores dos clientes"""
+    """Retorna health scores dos clientes com métricas detalhadas incluindo porte da loja"""
     cache_key = f"health-scores:{data_inicio or 'all'}:{data_fim or 'all'}"
     cache: CacheManager = request.app.state.cache
     

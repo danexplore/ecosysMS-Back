@@ -168,7 +168,7 @@ def convert_numeric_columns(dataframes: List[pd.DataFrame]) -> None:
     """
     numeric_cols_float = [
         'score_engajamento', 'score_movimentacao_estoque', 'score_crm', 'score_adoption',
-        'qntd_acessos_30d', 'dias_desde_ultimo_acesso', 'qntd_entradas_30d',
+        'qntd_acessos_30d', 'dias_desde_ultimo_acesso', 'estoque_total', 'qntd_entradas_30d',
         'dias_desde_ultima_entrada', 'qntd_saidas_30d', 'dias_desde_ultima_saida',
         'qntd_leads_30d', 'dias_desde_ultimo_lead'
     ]
@@ -332,10 +332,10 @@ def calculate_total_score(df: pd.DataFrame) -> pd.DataFrame:
         DataFrame com score_total calculado
     """
     WEIGHTS = {
-        'score_engajamento': 0.30,
-        'score_movimentacao_estoque': 0.30,
+        'score_engajamento': 0.35,
+        'score_movimentacao_estoque': 0.35,
         'score_crm': 0.20,
-        'score_adoption': 0.20
+        'score_adoption': 0.10
     }
     
     # Garantir que colunas de score existam e sejam numéricas
@@ -367,7 +367,7 @@ def select_final_columns(df: pd.DataFrame) -> pd.DataFrame:
     colunas_finais = [
         'tenant_id', 'slug', 'name', 'cnpj', 'qntd_acessos_30d',
         'dias_desde_ultimo_acesso', 'score_engajamento',
-        'qntd_entradas_30d', 'dias_desde_ultima_entrada',
+        'estoque_total', 'porte_loja', 'qntd_entradas_30d', 'dias_desde_ultima_entrada',
         'qntd_saidas_30d', 'dias_desde_ultima_saida',
         'score_movimentacao_estoque', 'qntd_leads_30d',
         'dias_desde_ultimo_lead', 'score_crm',
@@ -527,6 +527,10 @@ def dataframe_to_dict(df: pd.DataFrame) -> Dict:
                     'acessos': {
                         'quantidade_30d': int(row.qntd_acessos_30d) if pd.notna(row.qntd_acessos_30d) else 0,
                         'dias_ultimo_acesso': int(row.dias_desde_ultimo_acesso) if pd.notna(row.dias_desde_ultimo_acesso) else 9999
+                    },
+                    'estoque': {
+                        'veiculos_em_estoque': int(row.estoque_total) if pd.notna(row.estoque_total) else 0,
+                        'porte_loja': str(row.porte_loja) if pd.notna(row.porte_loja) else None
                     },
                     'entradas': {
                         'quantidade_30d': int(row.qntd_entradas_30d) if pd.notna(row.qntd_entradas_30d) else 0,

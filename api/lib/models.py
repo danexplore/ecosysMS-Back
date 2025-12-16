@@ -28,6 +28,8 @@ class ClientScoreHealth(BaseModel):
     qntd_acessos_30d: int = 0
     dias_desde_ultimo_acesso: int = 9999
     score_engajamento: float = 0.0 # Pilar 1
+    estoque_total: int = 0
+    porte_loja: Optional[str] = None
     qntd_entradas_30d: int = 0
     dias_desde_ultima_entrada: int = 9999
     qntd_saidas_30d: int = 0

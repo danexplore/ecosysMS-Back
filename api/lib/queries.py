@@ -65,70 +65,107 @@ ORDER BY score_engajamento DESC;
 """
 
 SEGUNDO_PILAR = """
--- Pilar 2: Movimentação de Estoque
-WITH entradas AS (
-  SELECT
-    tenant_id,
-    COUNT(CASE WHEN created_at >= CURDATE() - INTERVAL 30 DAY THEN 1 END) AS qntd_entradas_30d,
-    DATEDIFF(NOW(), MAX(created_at)) AS dias_desde_ultima_entrada
-  FROM inventory_entries
-  WHERE deleted_at IS NULL
-  GROUP BY tenant_id
+WITH 
+-- 1. Calcula o Estoque Atual (Usando NOT EXISTS para performance máxima)
+estoque_atual AS (
+    SELECT
+        ie.tenant_id,
+        COUNT(ie.id) as total_veiculos
+    FROM inventory_entries ie
+    WHERE ie.deleted_at IS NULL
+      AND ie.status = 'active'
+      -- Verifica se NÃO existe uma saída ativa para este veículo
+      AND NOT EXISTS (
+          SELECT 1 
+          FROM inventory_outs io 
+          WHERE io.vehicle_id = ie.vehicle_id 
+          AND io.deleted_at IS NULL
+      )
+    GROUP BY ie.tenant_id
 ),
-saidas AS (
-  SELECT
-    tenant_id,
-    COUNT(CASE WHEN created_at >= CURDATE() - INTERVAL 30 DAY THEN 1 END) AS qntd_saidas_30d,
-    DATEDIFF(NOW(), MAX(created_at)) AS dias_desde_ultima_saida
-  FROM inventory_outs
-  WHERE deleted_at IS NULL
-  GROUP BY tenant_id
+-- 2. Calcula Métricas de Entrada (Histórico)
+metricas_entradas AS (
+    SELECT 
+        tenant_id,
+        COUNT(CASE WHEN created_at >= CURDATE() - INTERVAL 30 DAY THEN 1 END) AS qntd_entradas_30d,
+        DATEDIFF(NOW(), MAX(created_at)) AS dias_desde_ultima_entrada
+    FROM inventory_entries
+    WHERE deleted_at IS NULL
+    GROUP BY tenant_id
+),
+-- 3. Calcula Métricas de Saída (Histórico)
+metricas_saidas AS (
+    SELECT 
+        tenant_id,
+        COUNT(CASE WHEN created_at >= CURDATE() - INTERVAL 30 DAY THEN 1 END) AS qntd_saidas_30d,
+        DATEDIFF(NOW(), MAX(created_at)) AS dias_desde_ultima_saida
+    FROM inventory_outs
+    WHERE deleted_at IS NULL
+    GROUP BY tenant_id
 )
+-- 4. Consolidação e Cálculo do Score
 SELECT
-  t.id AS tenant_id,
-  COALESCE(e.qntd_entradas_30d, 0) AS qntd_entradas_30d,
-  COALESCE(e.dias_desde_ultima_entrada, 9999) AS dias_desde_ultima_entrada,
-  COALESCE(s.qntd_saidas_30d, 0) AS qntd_saidas_30d,
-  COALESCE(s.dias_desde_ultima_saida, 9999) AS dias_desde_ultima_saida,
-  ROUND((
-    COALESCE(
-      CASE 
-        WHEN e.dias_desde_ultima_entrada <= 3 THEN 1
-        WHEN e.dias_desde_ultima_entrada <= 7 THEN 0.85
-        WHEN e.dias_desde_ultima_entrada <= 14 THEN 0.6
-        WHEN e.dias_desde_ultima_entrada <= 30 THEN 0.3
-        ELSE 0
-      END, 0
-    ) +
+    t.id AS tenant_id,
+    t.name,
+    COALESCE(ea.total_veiculos, 0) AS estoque_total,
+    -- Visualização do Porte (Para fins de debug/interface)
     CASE 
-      WHEN e.qntd_entradas_30d > 40 THEN 1.2
-      WHEN e.qntd_entradas_30d > 20 THEN 1
-      WHEN e.qntd_entradas_30d > 9 THEN 0.7
-      WHEN e.qntd_entradas_30d > 3 THEN 0.5
-      WHEN e.qntd_entradas_30d > 0 THEN 0.33
-      ELSE 0
-    END +
-    COALESCE(
-      CASE 
-        WHEN s.dias_desde_ultima_saida <= 3 THEN 1
-        WHEN s.dias_desde_ultima_saida <= 7 THEN 0.85
-        WHEN s.dias_desde_ultima_saida <= 14 THEN 0.6
-        WHEN s.dias_desde_ultima_saida <= 30 THEN 0.3
-        ELSE 0
-      END, 0
-    ) +
-    CASE 
-      WHEN s.qntd_saidas_30d > 40 THEN 1.2
-      WHEN s.qntd_saidas_30d > 20 THEN 1
-      WHEN s.qntd_saidas_30d > 9 THEN 0.7
-      WHEN s.qntd_saidas_30d > 3 THEN 0.5
-      WHEN s.qntd_saidas_30d > 0 THEN 0.33
-      ELSE 0
-    END
-  ) / 4, 2) AS score_movimentacao_estoque
+        WHEN COALESCE(ea.total_veiculos, 0) <= 15 THEN 'Pequeno'
+        WHEN COALESCE(ea.total_veiculos, 0) <= 50 THEN 'Médio'
+        ELSE 'Grande'
+    END AS porte_loja,
+    -- Métricas Brutas
+    COALESCE(me.qntd_entradas_30d, 0) AS qntd_entradas_30d,
+    COALESCE(me.dias_desde_ultima_entrada, 999) AS dias_desde_ultima_entrada,
+    COALESCE(ms.qntd_saidas_30d, 0) AS qntd_saidas_30d,
+    COALESCE(ms.dias_desde_ultima_saida, 999) AS dias_desde_ultima_saida,
+    -- SCORE CALCULADO (0 a 1)
+    ROUND((
+        -- A. Recência Entrada (Peso igual para todos)
+        COALESCE(CASE 
+            WHEN me.dias_desde_ultima_entrada <= 5 THEN 1.0
+            WHEN me.dias_desde_ultima_entrada <= 10 THEN 0.8
+            WHEN me.dias_desde_ultima_entrada <= 20 THEN 0.5
+            WHEN me.dias_desde_ultima_entrada <= 30 THEN 0.2
+            ELSE 0.0 -- Penalidade severa se não repor estoque há muito tempo
+        END, 0) +
+        -- B. Volume Entrada (Proporcional ao Porte)
+        CASE 
+            -- Pequeno (<= 15 carros)
+            WHEN COALESCE(ea.total_veiculos, 0) <= 15 THEN 
+                CASE WHEN me.qntd_entradas_30d >= 4 THEN 1.2 WHEN me.qntd_entradas_30d >= 2 THEN 0.8 WHEN me.qntd_entradas_30d >= 1 THEN 0.4 ELSE 0.0 END
+            -- Médio (16-50 carros)
+            WHEN COALESCE(ea.total_veiculos, 0) <= 50 THEN 
+                CASE WHEN me.qntd_entradas_30d >= 10 THEN 1.2 WHEN me.qntd_entradas_30d >= 5 THEN 0.8 WHEN me.qntd_entradas_30d >= 2 THEN 0.4 ELSE 0.0 END
+            -- Grande (> 50 carros)
+            ELSE 
+                CASE WHEN me.qntd_entradas_30d >= 30 THEN 1.2 WHEN me.qntd_entradas_30d >= 15 THEN 0.8 WHEN me.qntd_entradas_30d >= 7 THEN 0.4 ELSE 0.0 END
+        END +
+        -- C. Recência Saída (Peso igual para todos)
+        COALESCE(CASE 
+            WHEN ms.dias_desde_ultima_saida <= 3 THEN 1.0
+            WHEN ms.dias_desde_ultima_saida <= 7 THEN 0.8
+            WHEN ms.dias_desde_ultima_saida <= 15 THEN 0.5
+            WHEN ms.dias_desde_ultima_saida <= 30 THEN 0.2
+            ELSE 0.0
+        END, 0) +
+        -- D. Volume Saída (Proporcional ao Porte)
+        CASE 
+            -- Pequeno
+            WHEN COALESCE(ea.total_veiculos, 0) <= 15 THEN 
+                CASE WHEN ms.qntd_saidas_30d >= 3 THEN 1.2 WHEN ms.qntd_saidas_30d >= 2 THEN 0.8 WHEN ms.qntd_saidas_30d >= 1 THEN 0.4 ELSE 0.0 END
+            -- Médio
+            WHEN COALESCE(ea.total_veiculos, 0) <= 50 THEN 
+                CASE WHEN ms.qntd_saidas_30d >= 8 THEN 1.2 WHEN ms.qntd_saidas_30d >= 4 THEN 0.8 WHEN ms.qntd_saidas_30d >= 2 THEN 0.4 ELSE 0.0 END
+            -- Grande
+            ELSE 
+                CASE WHEN ms.qntd_saidas_30d >= 25 THEN 1.2 WHEN ms.qntd_saidas_30d >= 12 THEN 0.8 WHEN ms.qntd_saidas_30d >= 6 THEN 0.4 ELSE 0.0 END
+        END
+    ) / 4, 2) AS score_movimentacao_estoque
 FROM tenants t
-LEFT JOIN entradas e ON e.tenant_id = t.id
-LEFT JOIN saidas s ON s.tenant_id = t.id
+LEFT JOIN estoque_atual ea ON ea.tenant_id = t.id
+LEFT JOIN metricas_entradas me ON me.tenant_id = t.id
+LEFT JOIN metricas_saidas ms ON ms.tenant_id = t.id
 WHERE t.type = 'normal'
 ORDER BY score_movimentacao_estoque DESC;
 """

@@ -350,12 +350,14 @@ async function getClientesCriticos() {
       slug,
       nome: cliente.name,
       scoreTotal: cliente.scores.total,
-      adoption: cliente.scores.adocao
+      adoption: cliente.scores.adocao,
+      porteLoja: cliente.metrics.estoque.porte_loja,
+      estoqueTotal: cliente.metrics.estoque.total
     }));
   
   console.log(`\n=== Clientes Críticos: ${criticos.length} ===`);
   criticos.forEach(c => {
-    console.log(`- ${c.nome}: Score ${c.scoreTotal.toFixed(2)} (Adoção: ${c.adoption.toFixed(2)})`);
+    console.log(`- ${c.nome}: Score ${c.scoreTotal.toFixed(2)} (Adoção: ${c.adoption.toFixed(2)}) - Porte: ${c.porteLoja} (${c.estoqueTotal} veículos)`);
   });
 }
 
