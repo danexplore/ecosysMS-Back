@@ -170,7 +170,7 @@ def convert_numeric_columns(dataframes: List[pd.DataFrame]) -> None:
         'score_engajamento', 'score_movimentacao_estoque', 'score_crm', 'score_adoption',
         'qntd_acessos_30d', 'dias_desde_ultimo_acesso', 'estoque_total', 'qntd_entradas_30d',
         'dias_desde_ultima_entrada', 'qntd_saidas_30d', 'dias_desde_ultima_saida',
-        'qntd_leads_30d', 'dias_desde_ultimo_lead'
+        'qntd_leads_30d', 'dias_desde_ultimo_lead', 'usuarios_ativos_30d'
     ]
     
     for df in dataframes:
@@ -366,7 +366,7 @@ def select_final_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     colunas_finais = [
         'tenant_id', 'slug', 'name', 'cnpj', 'qntd_acessos_30d',
-        'dias_desde_ultimo_acesso', 'score_engajamento',
+        'dias_desde_ultimo_acesso', 'usuarios_ativos_30d', 'tipo_equipe', 'score_engajamento',
         'estoque_total', 'porte_loja', 'qntd_entradas_30d', 'dias_desde_ultima_entrada',
         'qntd_saidas_30d', 'dias_desde_ultima_saida',
         'score_movimentacao_estoque', 'qntd_leads_30d',
@@ -526,7 +526,9 @@ def dataframe_to_dict(df: pd.DataFrame) -> Dict:
                 'metrics': {
                     'acessos': {
                         'quantidade_30d': int(row.qntd_acessos_30d) if pd.notna(row.qntd_acessos_30d) else 0,
-                        'dias_ultimo_acesso': int(row.dias_desde_ultimo_acesso) if pd.notna(row.dias_desde_ultimo_acesso) else 9999
+                        'dias_ultimo_acesso': int(row.dias_desde_ultimo_acesso) if pd.notna(row.dias_desde_ultimo_acesso) else 9999,
+                        'usuarios_ativos_30d': int(row.usuarios_ativos_30d) if pd.notna(row.usuarios_ativos_30d) else 0,
+                        'tipo_equipe': str(row.tipo_equipe) if hasattr(row, 'tipo_equipe') and pd.notna(row.tipo_equipe) else None
                     },
                     'estoque': {
                         'veiculos_em_estoque': int(row.estoque_total) if pd.notna(row.estoque_total) else 0,

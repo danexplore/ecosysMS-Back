@@ -27,6 +27,8 @@ class ClientScoreHealth(BaseModel):
     cnpj: Optional[int] = None
     qntd_acessos_30d: int = 0
     dias_desde_ultimo_acesso: int = 9999
+    usuarios_ativos_30d: int = 0
+    tipo_equipe: Optional[str] = None
     score_engajamento: float = 0.0 # Pilar 1
     estoque_total: int = 0
     porte_loja: Optional[str] = None

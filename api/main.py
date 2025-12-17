@@ -517,7 +517,13 @@ async def get_health_scores(
     data_inicio: Optional[str] = None,
     data_fim: Optional[str] = None
 ):
-    """Retorna health scores dos clientes com métricas detalhadas incluindo porte da loja"""
+    """Retorna health scores dos clientes com métricas detalhadas incluindo porte da loja e engajamento proporcional ao tamanho da equipe
+    
+    O Pilar 1 (Engajamento) agora considera atividade semanal consistente:
+    - Pelo menos 5-7 acessos/semana do usuário mais ativo (≈20-28 em 28 dias)
+    - Thresholds proporcionais ao tamanho da equipe para justiça
+    - Tenants inativos recebem score 0.0
+    """
     cache_key = f"health-scores:{data_inicio or 'all'}:{data_fim or 'all'}"
     cache: CacheManager = request.app.state.cache
     

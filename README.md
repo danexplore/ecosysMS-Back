@@ -352,12 +352,14 @@ async function getClientesCriticos() {
       scoreTotal: cliente.scores.total,
       adoption: cliente.scores.adocao,
       porteLoja: cliente.metrics.estoque.porte_loja,
-      estoqueTotal: cliente.metrics.estoque.total
+      estoqueTotal: cliente.metrics.estoque.total,
+      usuariosAtivos: cliente.metrics.acessos.usuarios_ativos_30d,
+      tipoEquipe: cliente.metrics.acessos.tipo_equipe
     }));
   
   console.log(`\n=== Clientes Críticos: ${criticos.length} ===`);
   criticos.forEach(c => {
-    console.log(`- ${c.nome}: Score ${c.scoreTotal.toFixed(2)} (Adoção: ${c.adoption.toFixed(2)}) - Porte: ${c.porteLoja} (${c.estoqueTotal} veículos)`);
+    console.log(`- ${c.nome}: Score ${c.scoreTotal.toFixed(2)} (Adoção: ${c.adoption.toFixed(2)}) - Porte: ${c.porteLoja} (${c.estoqueTotal} veículos) - Equipe: ${c.tipoEquipe} (${c.usuariosAtivos} usuários)`);
   });
 }
 
@@ -388,14 +390,160 @@ curl -u admin:admin123 \
 
 ## 📊 Health Scores
 
-### 4 Pilares
+### Sistema de Pontuação
 
-| Pilar | Peso | Métricas |
-|-------|------|----------|
-| 🔥 **Engajamento** | 30% | Acessos nos últimos 30 dias, dias desde último acesso |
-| 📦 **Estoque** | 30% | Entradas/saídas nos últimos 30 dias, frequência |
-| 💼 **CRM** | 20% | Leads criados, oportunidades, frequência |
-| 🚀 **Adoção** | 20% | Integrações ativas, features avançadas |
+O Health Score é calculado com base em **4 pilares principais**, cada um com peso específico na avaliação geral do cliente. O sistema identifica automaticamente o nível de saúde do cliente e categoriza em 4 níveis.
+
+### 4 Pilares Detalhados
+
+#### 🔥 **Pilar 1: Engajamento (30%)**
+**Objetivo**: Medir a frequência e consistência do uso da plataforma pelos usuários do cliente.
+
+**Métricas Principais:**
+- Quantidade de acessos nos últimos 30 dias
+- Dias desde o último acesso
+- Número de usuários ativos (distintos)
+- Tipo de equipe (Pequena/Média/Grande/Extra Grande)
+
+**Fórmula de Cálculo:**
+```python
+# Score baseado em recência de acesso (igual para todos)
+score_recencia = {
+    dias <= 3: 1.0,
+    dias <= 7: 0.9,
+    dias <= 14: 0.6,
+    dias <= 30: 0.2,
+    dias > 30: 0.0
+}
+
+# Score baseado em frequência (proporcional ao tamanho da equipe)
+score_frequencia = {
+    'Pequena (1-2 users)': {
+        acessos >= 25: 1.2, >=12: 1.0, >=6: 0.7, >=3: 0.5, >=2: 0.3, else: 0.0
+    },
+    'Média (3-5 users)': {
+        acessos >= 40: 1.2, >=20: 1.0, >=10: 0.7, >=5: 0.5, >=3: 0.3, else: 0.0
+    },
+    'Grande (6-9 users)': {
+        acessos >= 70: 1.2, >=35: 1.0, >=18: 0.7, >=9: 0.5, >=5: 0.3, else: 0.0
+    },
+    'Extra Grande (10+ users)': {
+        acessos >= 95: 1.2, >=48: 1.0, >=24: 0.7, >=12: 0.5, >=7: 0.3, else: 0.0
+    }
+}
+
+score_engajamento = (score_recencia + score_frequencia) / 2
+```
+
+**Exemplo:**
+- Cliente com 4 usuários ativos, 45 acessos em 30 dias, último acesso há 0 dias
+- Tipo: Média equipe → score_frequencia = 1.2 (45 >= 40)
+- score_recencia = 1.0 (0 <= 3)
+- **Resultado**: (1.0 + 1.2) / 2 = **1.10**
+
+#### 📦 **Pilar 2: Gestão de Estoque (30%)**
+**Objetivo**: Avaliar a eficiência na gestão do inventário e movimentação de veículos.
+
+**Métricas Principais:**
+- Quantidade de entradas nos últimos 30 dias
+- Quantidade de saídas nos últimos 30 dias
+- Dias desde última entrada
+- Dias desde última saída
+- Porte da loja (calculado automaticamente)
+
+**Fórmula de Cálculo:**
+```python
+# Score baseado em frequência de entradas
+score_entradas = {
+    entradas >= 50: 1.2, >=25: 1.0, >=12: 0.7, >=6: 0.5, >=3: 0.3, else: 0.15
+}
+
+# Score baseado em frequência de saídas
+score_saidas = {
+    saidas >= 50: 1.2, >=25: 1.0, >=12: 0.7, >=6: 0.5, >=3: 0.3, else: 0.15
+}
+
+# Score baseado em recência
+score_recencia_estoque = {
+    max(dias_ultima_entrada, dias_ultima_saida) <= 7: 1.0,
+    <= 14: 0.8, <= 30: 0.5, else: 0.0
+}
+
+score_estoque = (score_entradas + score_saidas + score_recencia_estoque) / 3
+```
+
+**Exemplo:**
+- Cliente com 45 entradas, 38 saídas em 30 dias, última movimentação há 2 dias
+- score_entradas = 1.0 (45 >= 25), score_saidas = 1.0 (38 >= 25)
+- score_recencia = 1.0 (2 <= 7)
+- **Resultado**: (1.0 + 1.0 + 1.0) / 3 = **1.00**
+
+#### 💼 **Pilar 3: CRM e Vendas (20%)**
+**Objetivo**: Medir a atividade no sistema de CRM e geração de leads/oportunidades.
+
+**Métricas Principais:**
+- Quantidade de leads criados nos últimos 30 dias
+- Dias desde o último lead
+- Frequência de criação de leads
+
+**Fórmula de Cálculo:**
+```python
+# Score baseado em volume de leads
+score_volume_leads = {
+    leads >= 100: 1.2, >=50: 1.0, >=25: 0.7, >=10: 0.5, >=5: 0.3, else: 0.15
+}
+
+# Score baseado em recência
+score_recencia_leads = {
+    dias <= 7: 1.0, <=14: 0.8, <=30: 0.5, else: 0.0
+}
+
+score_crm = (score_volume_leads + score_recencia_leads) / 2
+```
+
+**Exemplo:**
+- Cliente com 67 leads em 30 dias, último lead há 3 dias
+- score_volume = 1.0 (67 >= 50), score_recencia = 1.0 (3 <= 7)
+- **Resultado**: (1.0 + 1.0) / 2 = **1.00**
+
+#### 🚀 **Pilar 4: Adoção Tecnológica (20%)**
+**Objetivo**: Avaliar o nível de adoção de recursos avançados da plataforma.
+
+**Métricas Principais:**
+- Status de integração com econversa (WhatsApp)
+- Status de anúncios (Ads)
+- Status de relatórios avançados
+- Status de contratos
+
+**Fórmula de Cálculo:**
+```python
+# Cada integração contribui igualmente
+score_adoption = (
+    econversa_connected = 0.4 +  # 40% do score
+    ads_status = 0.3 +           # 30% do score
+    reports_status = 0.2 +       # 20% do score
+    contracts_status = 0.1       # 10% do score
+)
+```
+
+**Exemplo:**
+- Cliente com econversa ativo, anúncios ativos, relatórios inativos, contratos ativos
+- **Resultado**: 0.4 + 0.3 + 0.0 + 0.1 = **1**
+
+### Pilar 1: Engajamento (Atualizado)
+
+O cálculo de engajamento agora considera atividade semanal consistente e é proporcional ao tamanho da equipe:
+
+**Frequência Esperada para Score Máximo (1.2):**
+- **Pequena equipe (1-2 usuários)**: ≥ 25 acessos/mês
+- **Média equipe (3-5 usuários)**: ≥ 40 acessos/mês 
+- **Grande equipe (6-9 usuários)**: ≥ 70 acessos/mês
+- **Extra grande (10+ usuários)**: ≥ 95 acessos/mês
+
+**Lógica:**
+- Baseado em 5-7 acessos/semana do usuário mais ativo (≈20-28 em 28 dias)
+- Thresholds ajustados para refletir engajamento "realmente excelente"
+- Tenants sem acesso recebem score 0.0 (antes dava mínimo 0.075)
 
 ### Categorias
 
@@ -406,16 +554,20 @@ curl -u admin:admin123 \
 🔴 Crítico  (≤0.3)   - Risco de churn
 ```
 
-### Fórmula
+### Fórmula Geral
 
 ```python
 score_total = (
-  score_engajamento × 0.30 +
-  score_estoque × 0.30 +
-  score_crm × 0.20 +
-  score_adoption × 0.20
+  score_engajamento × 0.35 +    # 35% - Engajamento e frequência
+  score_estoque × 0.35 +        # 35% - Gestão de inventário
+  score_crm × 0.20 +            # 20% - Atividade de vendas
+  score_adoption × 0.10         # 10% - Adoção tecnológica
 )
 ```
+
+**Exemplo de Cálculo Completo:**
+- Cliente com scores: engajamento=1.10, estoque=1.00, crm=1.00, adoption=0.1
+- **Resultado**: (1.10 × 0.35) + (1.00 × 0.35) + (1.00 × 0.20) + (1 × 0.10) = **1.035**
 
 ---
 
@@ -519,6 +671,8 @@ Atual: ~92% em produção (com TTL de 24h)
 - **BREAKING**: Filtros agora usam lógica OR (adesão OU churn no período)
 - **TTL de cache**: 5-10min → 24 horas
 - **Health distribution**: Exclui clientes da pipeline "Churns & Cancelamentos"
+- **Pilar 1 (Engajamento)**: Thresholds atualizados para atividade semanal consistente (5-7 acessos/semana), proporcionais ao tamanho da equipe
+- **Classificação de equipes**: Ajustada para Pequena (1-2), Média (3-5), Grande (6-9), Extra (10+)
 
 #### 🐛 Correções
 - Corrigido matching de clientes por CNPJ (antes usava client_id)

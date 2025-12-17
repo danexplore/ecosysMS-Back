@@ -27,37 +27,46 @@ order by data_adesao desc
 PRIMEIRO_PILAR = """
 -- Pilar 1: Engajamento e Frequência
 WITH acessos AS (
-	SELECT
-		COALESCE(al.tenant_id, u.tenant_id) AS tenant_id,
-		COUNT(CASE WHEN al.created_at >= CURDATE() - INTERVAL 30 DAY THEN 1 END) AS qntd_acessos,
-		DATEDIFF(NOW(), MAX(al.created_at)) AS dias_desde_ultimo_acesso
-	FROM activity_log al
-	LEFT JOIN users u ON u.id = al.subject_id
-	WHERE al.event = 'login'
-	GROUP BY COALESCE(al.tenant_id, u.tenant_id)
+    SELECT
+        COALESCE(al.tenant_id, u.tenant_id) AS tenant_id,
+        COUNT(CASE WHEN al.created_at >= CURDATE() - INTERVAL 30 DAY THEN 1 END) AS qntd_acessos,
+        DATEDIFF(NOW(), MAX(al.created_at)) AS dias_desde_ultimo_acesso,
+        COUNT(DISTINCT CASE WHEN al.created_at >= CURDATE() - INTERVAL 30 DAY THEN al.subject_id END) AS usuarios_ativos_30d
+    FROM activity_log al
+    LEFT JOIN users u ON u.id = al.subject_id
+    WHERE al.event = 'login'
+    GROUP BY COALESCE(al.tenant_id, u.tenant_id)
 )
 SELECT
-	t.id AS tenant_id,
-	COALESCE(a.qntd_acessos, 0) AS qntd_acessos_30d,
-	COALESCE(a.dias_desde_ultimo_acesso, 9999) AS dias_desde_ultimo_acesso,
-	ROUND((
-		CASE -- score_ultimo_acesso
-			WHEN a.dias_desde_ultimo_acesso <= 3 THEN 1
-			WHEN a.dias_desde_ultimo_acesso <= 7 THEN 0.9
-			WHEN a.dias_desde_ultimo_acesso <= 14 THEN 0.6
-			WHEN a.dias_desde_ultimo_acesso <= 30 THEN 0.2
-			ELSE 0
-		END +
-		CASE -- score_qntd_acessos
-			WHEN a.qntd_acessos > 75 THEN 1.2
-			WHEN a.qntd_acessos > 40 THEN 1
-			WHEN a.qntd_acessos > 25 THEN 0.7
-			WHEN a.qntd_acessos > 11 THEN 0.5
-			WHEN a.qntd_acessos > 6 THEN 0.3
-			WHEN a.qntd_acessos > 1 THEN 0.15
-			ELSE 0
-		END
-		) / 2, 2) AS score_engajamento
+    t.id AS tenant_id,
+    COALESCE(a.qntd_acessos, 0) AS qntd_acessos_30d,
+    COALESCE(a.dias_desde_ultimo_acesso, 9999) AS dias_desde_ultimo_acesso,
+    COALESCE(a.usuarios_ativos_30d, 0) AS usuarios_ativos_30d,
+    CASE -- tipo_equipe baseado no tamanho da equipe
+        WHEN COALESCE(a.usuarios_ativos_30d, 0) <= 2 THEN 'Pequena'
+        WHEN COALESCE(a.usuarios_ativos_30d, 0) <= 5 THEN 'Média'
+        WHEN COALESCE(a.usuarios_ativos_30d, 0) <= 9 THEN 'Grande'
+        ELSE 'Extra grande'
+    END AS tipo_equipe,
+    ROUND((
+        CASE -- score_ultimo_acesso (igual para todos)
+            WHEN a.dias_desde_ultimo_acesso <= 3 THEN 1
+            WHEN a.dias_desde_ultimo_acesso <= 7 THEN 0.9
+            WHEN a.dias_desde_ultimo_acesso <= 14 THEN 0.6
+            WHEN a.dias_desde_ultimo_acesso <= 30 THEN 0.2
+            ELSE 0
+        END +
+        CASE -- score_qntd_acessos (proporcional ao tamanho da equipe, ajustado para atividade semanal consistente)
+            WHEN COALESCE(a.usuarios_ativos_30d, 0) <= 2 THEN -- Pequena equipe (1-2 usuários)
+                CASE WHEN a.qntd_acessos >= 25 THEN 1.2 WHEN a.qntd_acessos >= 12 THEN 1 WHEN a.qntd_acessos >= 6 THEN 0.7 WHEN a.qntd_acessos >= 3 THEN 0.5 WHEN a.qntd_acessos >= 2 THEN 0.3 ELSE 0.0 END
+            WHEN COALESCE(a.usuarios_ativos_30d, 0) <= 5 THEN -- Média equipe (3-5 usuários)
+                CASE WHEN a.qntd_acessos >= 40 THEN 1.2 WHEN a.qntd_acessos >= 20 THEN 1 WHEN a.qntd_acessos >= 10 THEN 0.7 WHEN a.qntd_acessos >= 5 THEN 0.5 WHEN a.qntd_acessos >= 3 THEN 0.3 ELSE 0.0 END
+            WHEN COALESCE(a.usuarios_ativos_30d, 0) <= 9 THEN -- Grande equipe (6-9 usuários)
+                CASE WHEN a.qntd_acessos >= 70 THEN 1.2 WHEN a.qntd_acessos >= 35 THEN 1 WHEN a.qntd_acessos >= 18 THEN 0.7 WHEN a.qntd_acessos >= 9 THEN 0.5 WHEN a.qntd_acessos >= 5 THEN 0.3 ELSE 0.0 END
+            ELSE -- Extra grande equipe (10+ usuários)
+                CASE WHEN a.qntd_acessos >= 95 THEN 1.2 WHEN a.qntd_acessos >= 48 THEN 1 WHEN a.qntd_acessos >= 24 THEN 0.7 WHEN a.qntd_acessos >= 12 THEN 0.5 WHEN a.qntd_acessos >= 7 THEN 0.3 ELSE 0.0 END
+        END
+        ) / 2, 2) AS score_engajamento
 FROM tenants t
 LEFT JOIN acessos a ON t.id = a.tenant_id
 WHERE t.type = 'normal'
