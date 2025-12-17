@@ -40,7 +40,7 @@ def init_connection_pool():
         try:
             connection_pool = pooling.MySQLConnectionPool(
                 pool_name="ecosys_pool",
-                pool_size=10,  # Aumentado para suportar queries paralelas
+                pool_size=7,  # Aumentado para suportar queries paralelas
                 pool_reset_session=True,
                 host=os.getenv('DB_HOST_ECOSYS'),
                 database=os.getenv('DB_NAME_ECOSYS'),
@@ -50,7 +50,7 @@ def init_connection_pool():
                 autocommit=True,
                 connect_timeout=10
             )
-            logger.info("✅ Pool de conexões MySQL criado com sucesso (pool_size=10)")
+            logger.info("✅ Pool de conexões MySQL criado com sucesso (pool_size=7)")
             return connection_pool
         except Error as e:
             logger.error(f"❌ Erro ao criar pool de conexões: {e}")
