@@ -1,4 +1,3 @@
-import psycopg2
 import os
 from dotenv import load_dotenv
 import pandas as pd
@@ -8,33 +7,10 @@ import re
 import logging
 from functools import lru_cache
 from typing import Dict, List, Tuple, Optional
+from ..lib.db_connection import get_conn, release_conn
 
 load_dotenv()
 logger = logging.getLogger(__name__)
-
-# Session global para reutilizar conexões HTTP
-_session = None
-
-def get_session() -> requests.Session:
-    """Retorna uma session HTTP reutilizável para melhor performance"""
-    global _session
-    if _session is None:
-        _session = requests.Session()
-        _session.headers.update({
-            "Content-Type": "application/json",
-            "accept": "application/json"
-        })
-    return _session
-
-def get_conn():
-    conn = psycopg2.connect(
-        dbname=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT")
-    )
-    return conn
 
 def validate_cnpj(cnpj: str) -> Optional[str]:
     """Valida e normaliza CNPJ (remove caracteres não numéricos)"""

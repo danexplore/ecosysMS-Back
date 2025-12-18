@@ -15,7 +15,18 @@ from dataclasses import dataclass, asdict
 import logging
 from decimal import Decimal
 
-from supabase import create_client, Client
+from ..lib.db_connection import get_conn, release_conn
+from ..lib.inadimplencia_queries import (
+    BUSCAR_COMISSOES_PENDENTES,
+    BUSCAR_RESUMO_COMISSOES,
+    INSERIR_COMISSAO_PENDENTE,
+    ATUALIZAR_COMISSOES_STATUS,
+    BUSCAR_COMISSOES_BLOQUEADAS_POR_CNPJ,
+    ATUALIZAR_COMISSAO_PARA_PAGA,
+    BUSCAR_COMISSOES_LIBERADAS,
+    MARCAR_COMISSOES_PERDIDAS,
+    LIBERAR_COMISSOES_FIFO
+)
 
 load_dotenv = __import__('dotenv', fromlist=['load_dotenv']).load_dotenv
 load_dotenv()
@@ -60,7 +71,7 @@ class ComissaoPendente:
     recem_liberada: bool = False
 
 
-@dataclass 
+@dataclass
 class ResumoComissoesPendentes:
     """Resumo de comissões pendentes por vendedor."""
     vendedor_id: int
@@ -85,27 +96,212 @@ class ResultadoProcessamento:
 
 
 # ============================================================================
-# CONEXÃO SUPABASE
+# FUNÇÕES DE BANCO DE DADOS - ENCAPSULAMENTO
 # ============================================================================
 
-_supabase_client: Optional[Client] = None
+def _buscar_comissoes_pendentes_dados(
+    vendedor_id: Optional[int] = None,
+    status: Optional[str] = None,
+    limit: int = 100
+) -> List[dict]:
+    """Busca dados brutos de comissões pendentes."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(BUSCAR_COMISSOES_PENDENTES, (
+                vendedor_id, vendedor_id, status, status, limit
+            ))
+            rows = cur.fetchall()
+            columns = [desc[0] for desc in cur.description]
+            return [dict(zip(columns, row)) for row in rows]
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar comissões pendentes: {e}")
+        return []
+    finally:
+        release_conn(conn)
 
 
-def get_supabase() -> Client:
-    """Obtém cliente Supabase singleton."""
-    global _supabase_client
-    
-    if _supabase_client is None:
-        supabase_url = os.getenv("SUPABASE_URL")
-        supabase_key = os.getenv("SUPABASE_SERVICE_KEY") or os.getenv("SUPABASE_ANON_KEY")
-        
-        if not supabase_url or not supabase_key:
-            raise ValueError("SUPABASE_URL e SUPABASE_SERVICE_KEY devem estar configurados no .env")
-        
-        _supabase_client = create_client(supabase_url, supabase_key)
-        logger.info("✅ Cliente Supabase inicializado")
-    
-    return _supabase_client
+def _buscar_resumo_comissoes_dados(vendedor_id: Optional[int] = None) -> List[dict]:
+    """Busca dados brutos do resumo de comissões."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(BUSCAR_RESUMO_COMISSOES, (vendedor_id, vendedor_id))
+            rows = cur.fetchall()
+            columns = [desc[0] for desc in cur.description]
+            return [dict(zip(columns, row)) for row in rows]
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar resumo de comissões: {e}")
+        return []
+    finally:
+        release_conn(conn)
+
+
+def _inserir_comissao_pendente(dados: dict) -> bool:
+    """Insere uma comissão pendente."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(INSERIR_COMISSAO_PENDENTE, (
+                dados["cnpj"], dados["razao_social"], dados["vendedor_id"],
+                dados["vendedor_nome"], dados["mes_referencia"], dados["parcela_numero"],
+                dados["valor_mrr"], dados["percentual_aplicado"], dados["valor_comissao"],
+                dados["status"], dados["motivo_bloqueio"], dados["data_bloqueio"]
+            ))
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao inserir comissão pendente: {e}")
+        conn.rollback()
+        return False
+    finally:
+        release_conn(conn)
+
+
+def _atualizar_comissoes_status(cnpj: str, status: str, motivo: str = "") -> bool:
+    """Atualiza status de comissões de um cliente."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(ATUALIZAR_COMISSOES_STATUS, (
+                status, motivo, datetime.now().isoformat(), cnpj
+            ))
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao atualizar status de comissões: {e}")
+        conn.rollback()
+        return False
+    finally:
+        release_conn(conn)
+
+
+def _buscar_comissoes_bloqueadas_por_cnpj(cnpj: str, limit: int = None) -> List[dict]:
+    """Busca comissões bloqueadas de um cliente."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            params = [cnpj]
+            query = BUSCAR_COMISSOES_BLOQUEADAS_POR_CNPJ
+            if limit:
+                query += " LIMIT %s"
+                params.append(limit)
+
+            cur.execute(query, params)
+            rows = cur.fetchall()
+            columns = [desc[0] for desc in cur.description]
+            return [dict(zip(columns, row)) for row in rows]
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar comissões bloqueadas por CNPJ: {e}")
+        return []
+    finally:
+        release_conn(conn)
+
+
+def _atualizar_comissao_para_paga(comissao_id: str) -> bool:
+    """Atualiza uma comissão específica para paga."""
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(ATUALIZAR_COMISSAO_PARA_PAGA, (
+                datetime.now().isoformat(), datetime.now().isoformat(), comissao_id
+            ))
+            conn.commit()
+            return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao atualizar comissão para paga: {e}")
+        conn.rollback()
+        return False
+    finally:
+        release_conn(conn)
+
+
+def _buscar_comissoes_liberadas_dados(
+    vendedor_id: Optional[int] = None,
+    limit: int = 100
+) -> List[dict]:
+    """
+    Busca dados brutos das comissões liberadas.
+
+    Args:
+        vendedor_id: ID do vendedor para filtrar (opcional)
+        limit: Limite de registros (default 100)
+
+    Returns:
+        Lista de dicionários com dados das comissões
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(BUSCAR_COMISSOES_LIBERADAS, (vendedor_id, vendedor_id, limit))
+            rows = cur.fetchall()
+            columns = [desc[0] for desc in cur.description]
+            return [dict(zip(columns, row)) for row in rows]
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar comissões liberadas: {e}")
+        return []
+    finally:
+        release_conn(conn)
+
+
+def _marcar_comissao_perdida(cnpj: str, motivo: str = "cancelamento") -> bool:
+    """
+    Marca todas as comissões bloqueadas de um cliente como perdidas.
+
+    Args:
+        cnpj: CNPJ do cliente
+        motivo: Motivo da perda (default "cancelamento")
+
+    Returns:
+        True se sucesso, False caso contrário
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(MARCAR_COMISSOES_PERDIDAS, (
+                motivo, datetime.now().isoformat(), cnpj
+            ))
+            conn.commit()
+            logger.info(f"✅ Comissões marcadas como perdidas para CNPJ {cnpj}")
+            return True
+    except Exception as e:
+        logger.error(f"❌ Erro ao marcar comissões como perdidas: {e}")
+        conn.rollback()
+        return False
+    finally:
+        release_conn(conn)
+
+
+def _atualizar_comissoes_cliente_regularizado(cnpj: str, parcelas_pagas: int) -> int:
+    """
+    Libera comissões manualmente para um cliente que regularizou parcelas.
+
+    Args:
+        cnpj: CNPJ do cliente
+        parcelas_pagas: Número de parcelas pagas
+
+    Returns:
+        Número de comissões liberadas
+    """
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            # Liberar comissões por FIFO (mais antigas primeiro)
+            cur.execute(LIBERAR_COMISSOES_FIFO, (
+                datetime.now().isoformat(), datetime.now().isoformat(),
+                cnpj, parcelas_pagas
+            ))
+            liberadas = cur.rowcount
+            conn.commit()
+
+            logger.info(f"✅ {liberadas} comissões liberadas para CNPJ {cnpj}")
+            return liberadas
+    except Exception as e:
+        logger.error(f"❌ Erro ao liberar comissões: {e}")
+        conn.rollback()
+        return 0
+    finally:
+        release_conn(conn)
 
 
 # ============================================================================
@@ -117,35 +313,34 @@ def processar_snapshot_inadimplencia(
 ) -> List[ResultadoProcessamento]:
     """
     Processa o snapshot semanal de inadimplência.
-    
+
     Para cada cliente inadimplente, cria registros de comissão bloqueada
     na tabela comissoes_pendentes, um para cada parcela atrasada.
-    
+
     A função é idempotente: registros existentes são ignorados devido
     ao constraint UNIQUE(cnpj, mes_referencia).
-    
+
     Args:
         clientes: Lista de clientes inadimplentes do snapshot
-    
+
     Returns:
         Lista de resultados do processamento
     """
-    supabase = get_supabase()
     resultados = []
-    
+
     for cliente in clientes:
         try:
             # Para cada parcela atrasada, criar registro retroativo
             registros_criados = 0
             registros_existentes = 0
-            
+
             for parcela in range(1, cliente.parcelas_atrasadas + 1):
                 # Calcula o mês de referência retroativamente
                 # Se tem 3 parcelas atrasadas, cria para: mês-3, mês-2, mês-1
                 hoje = datetime.now()
                 mes_referencia = datetime(
-                    hoje.year, 
-                    hoje.month, 
+                    hoje.year,
+                    hoje.month,
                     1
                 )
                 # Subtrair meses
@@ -160,10 +355,10 @@ def processar_snapshot_inadimplencia(
                         mes_referencia = mes_referencia.replace(
                             month=mes_referencia.month - 1
                         )
-                
+
                 # Calcular valor da comissão
                 valor_comissao = cliente.valor_mrr * (cliente.percentual_comissao / 100)
-                
+
                 # Preparar dados para inserção
                 dados = {
                     "cnpj": cliente.cnpj,
@@ -179,26 +374,19 @@ def processar_snapshot_inadimplencia(
                     "motivo_bloqueio": "inadimplencia",
                     "data_bloqueio": datetime.now().isoformat()
                 }
-                
+
                 # Tentar inserir (ignora se já existir)
                 try:
-                    result = supabase.table("comissoes_pendentes").upsert(
-                        dados,
-                        on_conflict="cnpj,mes_referencia",
-                        ignore_duplicates=True
-                    ).execute()
-                    
-                    if result.data:
+                    sucesso = _inserir_comissao_pendente(dados)
+                    if sucesso:
                         registros_criados += 1
                     else:
                         registros_existentes += 1
-                        
+
                 except Exception as e:
-                    if "duplicate" in str(e).lower() or "unique" in str(e).lower():
-                        registros_existentes += 1
-                    else:
-                        raise e
-            
+                    logger.error(f"❌ Erro ao inserir parcela {parcela} para {cliente.cnpj}: {e}")
+                    registros_existentes += 1
+
             resultados.append(ResultadoProcessamento(
                 cnpj=cliente.cnpj,
                 razao_social=cliente.razao_social,
@@ -206,12 +394,12 @@ def processar_snapshot_inadimplencia(
                 registros_existentes=registros_existentes,
                 sucesso=True
             ))
-            
+
             logger.info(
                 f"✅ Processado {cliente.cnpj}: "
                 f"{registros_criados} criados, {registros_existentes} existentes"
             )
-            
+
         except Exception as e:
             logger.error(f"❌ Erro ao processar {cliente.cnpj}: {e}")
             resultados.append(ResultadoProcessamento(
@@ -222,7 +410,7 @@ def processar_snapshot_inadimplencia(
                 sucesso=False,
                 erro=str(e)
             ))
-    
+
     return resultados
 
 
@@ -237,31 +425,19 @@ def buscar_comissoes_pendentes(
 ) -> List[ComissaoPendente]:
     """
     Busca comissões pendentes com filtros opcionais.
-    
+
     Args:
         vendedor_id: ID do vendedor para filtrar (opcional)
         status: Status para filtrar (bloqueada/paga/perdida) (opcional)
         limit: Limite de registros (default 100)
-    
+
     Returns:
         Lista de comissões pendentes
     """
-    supabase = get_supabase()
-    
-    query = supabase.table("vw_comissoes_pendentes_detalhado").select("*")
-    
-    if vendedor_id:
-        query = query.eq("vendedor_id", vendedor_id)
-    
-    if status:
-        query = query.eq("status", status)
-    
-    query = query.order("mes_referencia", desc=False).limit(limit)
-    
-    result = query.execute()
-    
+    dados_brutos = _buscar_comissoes_pendentes_dados(vendedor_id, status, limit)
+
     comissoes = []
-    for row in result.data:
+    for row in dados_brutos:
         comissoes.append(ComissaoPendente(
             id=row.get("id", ""),
             cnpj=row.get("cnpj", ""),
@@ -281,7 +457,7 @@ def buscar_comissoes_pendentes(
             dias_bloqueada=row.get("dias_bloqueada", 0),
             recem_liberada=row.get("recem_liberada", False)
         ))
-    
+
     logger.info(f"✅ Encontradas {len(comissoes)} comissões pendentes")
     return comissoes
 
@@ -293,37 +469,25 @@ def buscar_comissoes_liberadas(
 ) -> List[ComissaoPendente]:
     """
     Busca comissões que foram liberadas (pagas via FIFO).
-    
+
     Args:
         vendedor_id: ID do vendedor para filtrar (opcional)
         mes_liberacao: Mês de liberação no formato YYYY-MM (opcional)
         limit: Limite de registros (default 100)
-    
+
     Returns:
         Lista de comissões liberadas
     """
-    supabase = get_supabase()
-    
-    query = supabase.table("vw_comissoes_pendentes_detalhado") \
-        .select("*") \
-        .eq("status", "paga")
-    
-    if vendedor_id:
-        query = query.eq("vendedor_id", vendedor_id)
-    
-    # Ordenar por data de liberação mais recente primeiro
-    query = query.order("data_liberacao", desc=True).limit(limit)
-    
-    result = query.execute()
-    
+    dados_brutos = _buscar_comissoes_liberadas_dados(vendedor_id, limit)
+
     comissoes = []
-    for row in result.data:
+    for row in dados_brutos:
         # Filtrar por mês de liberação se especificado
         if mes_liberacao:
             data_lib = row.get("data_liberacao", "")
             if data_lib and not data_lib.startswith(mes_liberacao):
                 continue
-        
+
         comissoes.append(ComissaoPendente(
             id=row.get("id", ""),
             cnpj=row.get("cnpj", ""),
@@ -343,7 +507,7 @@ def buscar_comissoes_liberadas(
             dias_bloqueada=row.get("dias_bloqueada", 0),
             recem_liberada=row.get("recem_liberada", False)
         ))
-    
+
     logger.info(f"✅ Encontradas {len(comissoes)} comissões liberadas")
     return comissoes
 
@@ -353,24 +517,17 @@ def buscar_resumo_comissoes(
 ) -> List[ResumoComissoesPendentes]:
     """
     Busca resumo consolidado de comissões por vendedor.
-    
+
     Args:
         vendedor_id: ID do vendedor para filtrar (opcional)
-    
+
     Returns:
         Lista de resumos por vendedor
     """
-    supabase = get_supabase()
-    
-    query = supabase.table("vw_comissoes_fifo_resumo").select("*")
-    
-    if vendedor_id:
-        query = query.eq("vendedor_id", vendedor_id)
-    
-    result = query.execute()
-    
+    dados_brutos = _buscar_resumo_comissoes_dados(vendedor_id)
+
     resumos = []
-    for row in result.data:
+    for row in dados_brutos:
         resumos.append(ResumoComissoesPendentes(
             vendedor_id=row.get("vendedor_id", 0),
             vendedor_nome=row.get("vendedor_nome", ""),
@@ -381,7 +538,7 @@ def buscar_resumo_comissoes(
             total_pago=float(row.get("total_pago", 0)),
             pago_mes_atual=float(row.get("pago_mes_atual", 0))
         ))
-    
+
     logger.info(f"✅ Encontrados {len(resumos)} resumos de comissões")
     return resumos
 
@@ -393,82 +550,31 @@ def buscar_resumo_comissoes(
 def marcar_comissao_perdida(cnpj: str, motivo: str = "cancelamento") -> bool:
     """
     Marca todas as comissões bloqueadas de um cliente como perdidas.
-    
+
     Usar quando o cliente for cancelado definitivamente.
-    
+
     Args:
         cnpj: CNPJ do cliente
         motivo: Motivo da perda (default: cancelamento)
-    
+
     Returns:
         True se sucesso, False caso contrário
     """
-    supabase = get_supabase()
-    
-    try:
-        result = supabase.table("comissoes_pendentes") \
-            .update({
-                "status": "perdida",
-                "motivo_bloqueio": motivo,
-                "updated_at": datetime.now().isoformat()
-            }) \
-            .eq("cnpj", cnpj) \
-            .eq("status", "bloqueada") \
-            .execute()
-        
-        logger.info(f"✅ Comissões marcadas como perdidas para CNPJ {cnpj}")
-        return True
-        
-    except Exception as e:
-        logger.error(f"❌ Erro ao marcar comissões como perdidas: {e}")
-        return False
+    return _marcar_comissao_perdida(cnpj, motivo)
 
 
 def atualizar_comissoes_cliente_regularizado(cnpj: str, parcelas_pagas: int) -> int:
     """
     Libera comissões manualmente para um cliente que regularizou parcelas.
-    
+
     Usar em casos onde o webhook não disparou automaticamente.
-    
+
     Args:
         cnpj: CNPJ do cliente
         parcelas_pagas: Quantidade de parcelas pagas
-    
+
     Returns:
         Quantidade de comissões liberadas
     """
-    supabase = get_supabase()
-    
-    try:
-        # Buscar comissões bloqueadas mais antigas
-        result = supabase.table("comissoes_pendentes") \
-            .select("id") \
-            .eq("cnpj", cnpj) \
-            .eq("status", "bloqueada") \
-            .order("mes_referencia", desc=False) \
-            .limit(parcelas_pagas) \
-            .execute()
-        
-        if not result.data:
-            logger.info(f"Nenhuma comissão bloqueada encontrada para CNPJ {cnpj}")
-            return 0
-        
-        # Atualizar cada uma para 'paga'
-        liberadas = 0
-        for row in result.data:
-            supabase.table("comissoes_pendentes") \
-                .update({
-                    "status": "paga",
-                    "data_liberacao": datetime.now().isoformat(),
-                    "updated_at": datetime.now().isoformat()
-                }) \
-                .eq("id", row["id"]) \
-                .execute()
-            liberadas += 1
-        
-        logger.info(f"✅ {liberadas} comissões liberadas para CNPJ {cnpj}")
-        return liberadas
-        
-    except Exception as e:
-        logger.error(f"❌ Erro ao liberar comissões: {e}")
-        return 0
+    return _atualizar_comissoes_cliente_regularizado(cnpj, parcelas_pagas)
+

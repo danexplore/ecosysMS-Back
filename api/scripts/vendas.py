@@ -8,7 +8,6 @@ Implementa funcionalidades para:
 - Ranking de vendedores
 """
 
-import psycopg2
 import os
 from dotenv import load_dotenv
 from datetime import datetime
@@ -16,6 +15,7 @@ from typing import Dict, Optional, List, Literal
 from dataclasses import dataclass, asdict
 import logging
 
+from ..lib.db_connection import get_conn, release_conn
 from ..lib.queries import (
     SELECT_VENDEDORES,
     SELECT_CLIENTES_COMISSAO,
@@ -229,7 +229,7 @@ def fetch_commission_config() -> CommissionConfig:
         logger.error(f"❌ Erro ao buscar configuração de comissões: {e}")
         return _get_default_commission_config()
     finally:
-        conn.close()
+        release_conn(conn)
 
 
 def _get_default_commission_config() -> CommissionConfig:
@@ -396,7 +396,7 @@ def update_commission_config(
         logger.error(f"❌ Erro ao atualizar configuração de comissões: {e}")
         raise e
     finally:
-        conn.close()
+        release_conn(conn)
 
 
 def get_percentual_comissao_recorrente(meses_comissao: int, config: Optional[CommissionConfig] = None) -> float:
@@ -629,22 +629,6 @@ def map_status(cliente: Dict, reference_month: Optional[str] = None) -> Literal[
 
 
 # ============================================================================
-# CONEXÃO COM BANCO DE DADOS
-# ============================================================================
-
-def get_conn():
-    """Cria conexão com o banco PostgreSQL."""
-    conn = psycopg2.connect(
-        dbname=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT")
-    )
-    return conn
-
-
-# ============================================================================
 # FUNÇÕES DE SERVIÇO
 # ============================================================================
 
@@ -677,7 +661,7 @@ def fetch_vendedores() -> List[Vendedor]:
         logger.error(f"❌ Erro ao buscar vendedores: {e}")
         return []
     finally:
-        conn.close()
+        release_conn(conn)
 
 
 def map_cliente_to_comissao(cliente: Dict, reference_month: Optional[str] = None, vendedor_tier: str = 'bronze') -> ClienteComissao:
@@ -871,7 +855,7 @@ def fetch_parcelas_pagas_por_vendedor() -> Dict[str, Dict]:
         logger.error(f"❌ Erro ao buscar parcelas pagas: {e}")
         return {}
     finally:
-        conn.close()
+        release_conn(conn)
 
 
 def fetch_parcelas_pagas_mes_comissao(mes_comissao: str) -> List[Dict]:
@@ -910,7 +894,7 @@ def fetch_parcelas_pagas_mes_comissao(mes_comissao: str) -> List[Dict]:
         logger.error(f"❌ Erro ao buscar parcelas por mês de comissão: {e}")
         return []
     finally:
-        conn.close()
+        release_conn(conn)
 
 
 def calcular_comissao_por_historico_pagamentos(
@@ -1034,7 +1018,7 @@ def calcular_comissao_por_historico_pagamentos(
         logger.error(f"❌ Erro ao calcular comissão por histórico: {e}")
         return (0.0, 0.0, -1)
     finally:
-        conn.close()
+        release_conn(conn)
 
 
 def fetch_comissoes_por_historico(mes_referencia: str) -> List[Dict]:
@@ -1148,7 +1132,7 @@ def fetch_all_clientes_comissao(month: Optional[str] = None) -> List[ClienteComi
         logger.error(f"❌ Erro ao buscar clientes: {e}")
         return []
     finally:
-        conn.close()
+        release_conn(conn)
 
 
 def fetch_clientes_by_vendedor(vendedor_id: int, month: Optional[str] = None, vendedor_tier: str = 'bronze') -> List[ClienteComissao]:
@@ -1196,7 +1180,7 @@ def fetch_clientes_by_vendedor(vendedor_id: int, month: Optional[str] = None, ve
         logger.error(f"❌ Erro ao buscar clientes do vendedor {vendedor_id}: {e}")
         return []
     finally:
-        conn.close()
+        release_conn(conn)
 
 
 def fetch_clientes_inadimplentes(month: Optional[str] = None) -> List[ClienteComissao]:
@@ -1236,7 +1220,7 @@ def fetch_clientes_inadimplentes(month: Optional[str] = None) -> List[ClienteCom
         logger.error(f"❌ Erro ao buscar inadimplentes: {e}")
         return []
     finally:
-        conn.close()
+        release_conn(conn)
 
 
 def fetch_novos_clientes_mes(month: Optional[str] = None) -> List[ClienteComissao]:
@@ -1279,7 +1263,7 @@ def fetch_novos_clientes_mes(month: Optional[str] = None) -> List[ClienteComissa
         logger.error(f"❌ Erro ao buscar novos clientes: {e}")
         return []
     finally:
-        conn.close()
+        release_conn(conn)
 
 
 def fetch_vendas_do_mes(month: Optional[str] = None) -> List[ClienteComissao]:
@@ -1322,7 +1306,7 @@ def fetch_vendas_do_mes(month: Optional[str] = None) -> List[ClienteComissao]:
         logger.error(f"❌ Erro ao buscar vendas do mês: {e}")
         return []
     finally:
-        conn.close()
+        release_conn(conn)
 
 
 def fetch_churns_mes_especifico(month: Optional[str] = None) -> List[ClienteComissao]:
@@ -1411,7 +1395,7 @@ def fetch_churns_mes_especifico(month: Optional[str] = None) -> List[ClienteComi
         logger.error(f"❌ Erro ao buscar churns específicos: {e}")
         return []
     finally:
-        conn.close()
+        release_conn(conn)
 
 
 def fetch_churns_mes(month: Optional[str] = None) -> List[ClienteComissao]:
@@ -1454,7 +1438,7 @@ def fetch_churns_mes(month: Optional[str] = None) -> List[ClienteComissao]:
         logger.error(f"❌ Erro ao buscar churns: {e}")
         return []
     finally:
-        conn.close()
+        release_conn(conn)
 
 
 def fetch_resumo_comissoes_por_vendedor(month: Optional[str] = None) -> List[Dict]:

@@ -3,7 +3,8 @@ import logging
 from typing import Dict, Optional
 from decimal import Decimal
 from datetime import datetime
-from .clientes import fetch_clientes, get_conn
+from .clientes import fetch_clientes
+from ..lib.db_connection import get_conn, release_conn
 
 logger = logging.getLogger(__name__)
 
@@ -222,4 +223,4 @@ def data_ultima_atualizacao_inadimplentes() -> Optional[str]:
         return None
     finally:
         cursor.close()
-        conn.close()
+        release_conn(conn)

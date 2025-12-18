@@ -1,7 +1,6 @@
 pydantic
 pandas
 fastapi
-supabase
 upstash_redis
 psycopg2-binary
 python-dotenv

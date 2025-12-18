@@ -1,25 +1,15 @@
-import psycopg2
 import os
 from dotenv import load_dotenv
 import json
 import datetime
 from ..lib.queries import SELECT_CLIENTES, LOGINS_BY_TENANT, METRICAS_CLIENTES, SELECT_CS_USERS
 from ..lib.models import Cliente
+from ..lib.db_connection import get_conn, release_conn
 from typing import Dict, Optional, List
 import logging
 
 load_dotenv()
 logger = logging.getLogger(__name__)
-
-def get_conn():
-    conn = psycopg2.connect(
-        dbname=os.getenv("DB_NAME"),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        host=os.getenv("DB_HOST"),
-        port=os.getenv("DB_PORT")
-    )
-    return conn
 
 def json_serial(obj):
     """JSON serializer for objects not serializable by default json code"""
@@ -139,7 +129,7 @@ def fetch_clientes(
         results.append(cliente)
 
     cur.close()
-    conn.close()
+    release_conn(conn)
         
     # sanitize results to ensure all dates are converted
     results_sanitized = sanitize_for_json(results)
@@ -259,7 +249,7 @@ def fetch_tenant_logins(tenant_id: int) -> Dict:
         logger.error(f"Erro ao executar query de logins: {e}")
         raise
     finally:
-        conn.close()
+        release_conn(conn)
 
 def calculate_clientes_evolution(
     data_inicio: Optional[str] = None,
@@ -400,7 +390,7 @@ def fetch_cs_users() -> List[Dict]:
         raise
     finally:
         if conn:
-            conn.close()
+            release_conn(conn)
 
 def metricas_clientes() -> List[Dict]:
     """

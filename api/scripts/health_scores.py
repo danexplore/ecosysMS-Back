@@ -14,7 +14,7 @@ import logging
 import threading
 import uuid
 import psycopg2
-from .clientes import get_conn as get_psql_conn
+from ..lib.db_connection import get_conn as get_psql_conn, release_conn
 import time
 
 load_dotenv()
@@ -630,7 +630,7 @@ def store_health_scores_in_db(health_scores: Dict):
         
     finally:
         if conn:
-            conn.close()
+            release_conn(conn)
 
 def merge_dataframes(
     data_inicio: Optional[str] = None,
