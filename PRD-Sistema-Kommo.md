@@ -1997,7 +1997,7 @@ sentry-sdk==1.39.2
 ---
 
 ## 📝 Glossário
-
+a
 - **Lead**: Cliente potencial cadastrado no CRM
 - **Demo**: Demonstração/test-drive do produto
 - **No-show**: Cliente que agendou demo mas não compareceu

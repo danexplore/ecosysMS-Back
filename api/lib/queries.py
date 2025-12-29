@@ -16,3 +16,6 @@ from .health_scores_queries import *
 
 # Queries de usuários
 from .users_queries import *
+
+# Queries de leads
+from .leads_queries import *
