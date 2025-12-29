@@ -406,13 +406,6 @@ def filter_active_clients(
     
     # Filtrar e limpar dados
     df = df[df['cnpj'].isin(clientes['cnpj'])]
-    # Logar clientes com tenant_id nulo antes de dropá-los
-    null_tenants = df[df['tenant_id'].isna()]
-    with open('null_tenants_log.json', 'w', encoding='utf-8') as f:
-        json.dump(null_tenants[['cnpj', 'name', 'slug']].to_dict('records'), f, indent=2)
-    if not null_tenants.empty:
-        null_tenants_data = null_tenants[['cnpj', 'name', 'slug']].to_dict('records')
-        logger.warning(f"Clientes removidos por tenant_id nulo: {json.dumps(null_tenants_data, indent=2)}")
     
     df = df.dropna(subset=['tenant_id'])
     df.sort_values(by='score_total', ascending=False, inplace=True)
