@@ -25,7 +25,7 @@ ASAAS_API_KEY = os.getenv("ASAAS_API_KEY", "")
 ASAAS_SANDBOX = os.getenv("ASAAS_SANDBOX", "true").lower() == "true"
 
 ASAAS_BASE_URL = (
-    "https://sandbox.asaas.com/api/v3"
+    "https://api-sandbox.asaas.com/v3"
     if ASAAS_SANDBOX
     else "https://api.asaas.com/v3"
 )
