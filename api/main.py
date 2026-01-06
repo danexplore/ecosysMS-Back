@@ -18,6 +18,7 @@ from .scripts.credere import (
     process_client,
     clear_credere_cache
 )
+from .scripts.asaas_proxy import asaas_router, asaas_compat_router
 from .scripts.vendas import (
     fetch_resumo_comissoes_por_vendedor,
     fetch_dashboard_metrics,
@@ -70,9 +71,6 @@ from pydantic import BaseModel, Field
 # ============================================================================
 
 load_dotenv()
-
-# Agora podemos importar módulos que dependem de variáveis de ambiente
-from .scripts.payments import router as payments_router
 
 # Logging estruturado
 logging.basicConfig(
@@ -367,6 +365,7 @@ async def lifespan(app: FastAPI):
         raise
     finally:
         logger.info("🔴 Encerrando aplicação...")
+        
         executor.shutdown(wait=True)
         logger.info("✅ Aplicação encerrada")
 
@@ -401,6 +400,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ============================================================================
+# ROUTERS
+# ============================================================================
+
+app.include_router(asaas_router)
+app.include_router(asaas_compat_router)
+
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
     """Adiciona tempo de processamento nos headers"""
@@ -409,13 +415,6 @@ async def add_process_time_header(request: Request, call_next):
     process_time = time.time() - start_time
     response.headers["X-Process-Time"] = f"{process_time:.3f}s"
     return response
-
-# ============================================================================
-# ROUTERS
-# ============================================================================
-
-# Incluir router de pagamentos Asaas
-app.include_router(payments_router)
 
 # ============================================================================
 # ENDPOINTS

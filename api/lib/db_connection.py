@@ -13,7 +13,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 # Pool de conexões para melhor performance
-connection_pool: Optional[psycopg2.pool.SimpleConnectionPool] = None
+connection_pool: Optional[psycopg2.pool.ThreadedConnectionPool] = None
 
 
 def init_connection_pool():
@@ -22,16 +22,17 @@ def init_connection_pool():
 
     if connection_pool is None:
         try:
-            connection_pool = psycopg2.pool.SimpleConnectionPool(
-                minconn=1,
-                maxconn=10,
+            # Usar ThreadedConnectionPool para melhor suporte a concorrência
+            connection_pool = psycopg2.pool.ThreadedConnectionPool(
+                minconn=2,
+                maxconn=20,  # Aumentar limite de conexões
                 dbname=os.getenv("DB_NAME"),
                 user=os.getenv("DB_USER"),
                 password=os.getenv("DB_PASSWORD"),
                 host=os.getenv("DB_HOST"),
                 port=os.getenv("DB_PORT", "5432")
             )
-            logger.info("✅ Pool de conexões PostgreSQL inicializado")
+            logger.info("✅ Pool de conexões PostgreSQL inicializado (2-20 conexões)")
         except Exception as e:
             logger.error(f"❌ Erro ao inicializar pool de conexões: {e}")
             raise
@@ -69,11 +70,32 @@ def release_conn(conn):
     """
     global connection_pool
 
-    if connection_pool is not None:
+    if connection_pool is not None and conn is not None:
         try:
             connection_pool.putconn(conn)
         except Exception as e:
             logger.error(f"❌ Erro ao liberar conexão: {e}")
+
+
+from contextlib import contextmanager
+
+@contextmanager
+def get_db_connection():
+    """
+    Context manager para obter e liberar conexão automaticamente.
+    
+    Uso:
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT * FROM tabela")
+    """
+    conn = None
+    try:
+        conn = get_conn()
+        yield conn
+    finally:
+        if conn is not None:
+            release_conn(conn)
 
 
 def close_all_connections():
