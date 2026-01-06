@@ -1554,23 +1554,10 @@ CACHE_KEYS = {
 
 ### Database Optimizations
 
-1. **Indexes**
-   ```sql
-   CREATE INDEX idx_leads_criado_em ON kommo_leads_statistics(criado_em);
-   CREATE INDEX idx_leads_data_demo ON kommo_leads_statistics(data_demo);
-   CREATE INDEX idx_leads_data_venda ON kommo_leads_statistics(data_venda);
-   CREATE INDEX idx_leads_vendedor ON kommo_leads_statistics(vendedor);
-   CREATE INDEX idx_leads_pipeline ON kommo_leads_statistics(pipeline);
-   CREATE INDEX idx_leads_status ON kommo_leads_statistics(status);
-   
-   CREATE INDEX idx_chamadas_atendido_em ON kommo_chamadas(atendido_em);
-   CREATE INDEX idx_chamadas_name ON kommo_chamadas(name);
-   ```
-
-2. **Materialized Views** (Considerar)
-   - Resumo diário pré-calculado
-   - Métricas de vendedor
-   - Estatísticas de campanha
+**Materialized Views** (Considerar)
+  - Resumo diário pré-calculado
+  - Métricas de vendedor
+  - Estatísticas de campanha
 
 ### API Response Compression
 ```python

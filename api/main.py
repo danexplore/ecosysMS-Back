@@ -47,6 +47,7 @@ from .scripts.inadimplencia import (
     ResumoComissoesPendentes,
     ResultadoProcessamento
 )
+from .scripts.payments import router as payments_router
 import os
 import warnings
 import json
@@ -406,6 +407,13 @@ async def add_process_time_header(request: Request, call_next):
     process_time = time.time() - start_time
     response.headers["X-Process-Time"] = f"{process_time:.3f}s"
     return response
+
+# ============================================================================
+# ROUTERS
+# ============================================================================
+
+# Incluir router de pagamentos Asaas
+app.include_router(payments_router)
 
 # ============================================================================
 # ENDPOINTS
