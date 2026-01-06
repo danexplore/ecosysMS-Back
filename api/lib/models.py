@@ -1,5 +1,72 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 from typing import Optional, List
+import re
+
+
+def validate_cpf(cpf: str) -> bool:
+    """Valida CPF usando algoritmo oficial."""
+    cpf = ''.join(filter(str.isdigit, cpf))
+
+    if len(cpf) != 11:
+        return False
+
+    # Verifica se todos os dígitos são iguais
+    if cpf == cpf[0] * 11:
+        return False
+
+    # Calcula primeiro dígito verificador
+    soma = sum(int(cpf[i]) * (10 - i) for i in range(9))
+    resto = (soma * 10) % 11
+    dv1 = 0 if resto == 10 else resto
+
+    # Calcula segundo dígito verificador
+    soma = sum(int(cpf[i]) * (11 - i) for i in range(10))
+    resto = (soma * 10) % 11
+    dv2 = 0 if resto == 10 else resto
+
+    return cpf[-2:] == f"{dv1}{dv2}"
+
+
+def validate_cnpj(cnpj: str) -> bool:
+    """Valida CNPJ usando algoritmo oficial."""
+    cnpj = ''.join(filter(str.isdigit, cnpj))
+
+    if len(cnpj) != 14:
+        return False
+
+    # Verifica se todos os dígitos são iguais
+    if cnpj == cnpj[0] * 14:
+        return False
+
+    # Calcula primeiro dígito verificador
+    pesos = [5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+    soma = sum(int(cnpj[i]) * pesos[i] for i in range(12))
+    resto = soma % 11
+    dv1 = 0 if resto < 2 else 11 - resto
+
+    # Calcula segundo dígito verificador
+    pesos = [6, 5, 4, 3, 2, 9, 8, 7, 6, 5, 4, 3, 2]
+    soma = sum(int(cnpj[i]) * pesos[i] for i in range(13))
+    resto = soma % 11
+    dv2 = 0 if resto < 2 else 11 - resto
+
+    return cnpj[-2:] == f"{dv1}{dv2}"
+
+
+def validate_cpf_cnpj(value: str) -> str:
+    """Valida e limpa CPF ou CNPJ."""
+    cleaned = ''.join(filter(str.isdigit, value))
+
+    if len(cleaned) == 11:
+        if not validate_cpf(cleaned):
+            raise ValueError(f'CPF inválido: {value}')
+    elif len(cleaned) == 14:
+        if not validate_cnpj(cleaned):
+            raise ValueError(f'CNPJ inválido: {value}')
+    else:
+        raise ValueError(f'CPF/CNPJ deve ter 11 (CPF) ou 14 (CNPJ) dígitos. Recebido: {len(cleaned)} dígitos')
+
+    return cleaned
 
 class Cliente(BaseModel):
     """Modelo Pydantic para clientes vindo do banco."""
@@ -126,6 +193,11 @@ class AsaasCustomerCreate(BaseModel):
     address: Optional[AddressModel] = None
     external_reference: Optional[str] = None
     notification_disabled: bool = False
+
+    @validator('cpf_cnpj')
+    def validate_cpf_cnpj_field(cls, v):
+        """Valida CPF/CNPJ usando algoritmos oficiais."""
+        return validate_cpf_cnpj(v)
 
 
 class AsaasCustomerResponse(BaseModel):

@@ -731,9 +731,19 @@ GET /api/v1/asaas/customers?offset=20&limit=20
 ## 7. Validações e Regras de Negócio
 
 ### 7.1 CPF/CNPJ
-- Validar formato (11 ou 14 dígitos)
-- Remover caracteres especiais antes de enviar
-- Verificar se já existe antes de criar cliente
+- **Validação obrigatória**: CPF/CNPJ deve ser válido segundo algoritmos oficiais brasileiros
+- **Formato**: Apenas números (11 dígitos para CPF, 14 para CNPJ)
+- **Limpeza automática**: Caracteres especiais são removidos automaticamente
+- **Verificação**: Cliente já existente é verificado antes da criação
+
+**Exemplos válidos:**
+- CPF: `123.456.789-09` ou `12345678909`
+- CNPJ: `12.345.678/0001-99` ou `12345678000199`
+
+**Exemplos inválidos:**
+- CPF/CNPJ com todos dígitos iguais: `111.111.111-11`
+- CPF/CNPJ com dígitos verificadores incorretos
+- Quantidade errada de dígitos
 
 ### 7.2 Valores
 - Valor mínimo: R$ 5,00
@@ -922,7 +932,30 @@ Invalidar cache após:
 
 ---
 
-## 13. Roadmap Futuro
+## 13. Tratamento de Erros
+
+### 13.1 Erros de Validação
+- **CPF/CNPJ inválido**: "CPF/CNPJ inválido. Verifique os dígitos."
+- **Cliente já existe**: "Cliente já cadastrado no Asaas com este documento."
+- **Dados obrigatórios ausentes**: "Campo obrigatório não preenchido."
+
+### 13.2 Erros de Autenticação
+- **Token inválido**: "Falha na autenticação. Verifique suas credenciais."
+- **Acesso negado**: "Você não tem permissão para acessar este recurso."
+
+### 13.3 Erros de API
+- **Erro interno**: "Erro interno do servidor. Tente novamente mais tarde."
+- **Serviço indisponível**: "Serviço temporariamente indisponível."
+
+### 13.4 Estratégia de Exibição
+- Mostrar mensagens de erro em português
+- Usar cores: vermelho para erros, amarelo para avisos
+- Manter mensagens visíveis por tempo suficiente para leitura
+- Oferecer ação corretiva quando possível
+
+---
+
+## 14. Roadmap Futuro
 
 ### Fase 2 (Futuras Melhorias)
 - [ ] Envio de lembretes por email/SMS
@@ -936,7 +969,7 @@ Invalidar cache após:
 
 ---
 
-## 14. Contatos e Suporte
+## 15. Contatos e Suporte
 
 **Equipe Backend:** [Inserir contato]  
 **Documentação API:** `/docs` (Swagger)  
@@ -944,9 +977,9 @@ Invalidar cache após:
 
 ---
 
-## 15. Anexos
+## 16. Anexos
 
-### 15.1 Mapeamento de Status
+### 16.1 Mapeamento de Status
 
 | Status Asaas | Cor | Label PT-BR | Ação Permitida |
 |-------------|-----|-------------|----------------|
@@ -956,7 +989,7 @@ Invalidar cache após:
 | OVERDUE | 🔴 Vermelho | Vencido | Enviar lembrete |
 | REFUNDED | 🔵 Azul | Estornado | Ver histórico |
 
-### 15.2 Ciclos de Cobrança
+### 16.2 Ciclos de Cobrança
 
 | Cycle | Label PT-BR | Descrição |
 |-------|-------------|-----------|
@@ -967,7 +1000,7 @@ Invalidar cache após:
 | SEMIANNUALLY | Semestral | A cada 6 meses |
 | YEARLY | Anual | Uma vez por ano |
 
-### 15.3 Formas de Pagamento
+### 16.3 Formas de Pagamento
 
 | Billing Type | Label PT-BR | Ícone Sugerido |
 |-------------|-------------|----------------|

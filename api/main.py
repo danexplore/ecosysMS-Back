@@ -47,7 +47,6 @@ from .scripts.inadimplencia import (
     ResumoComissoesPendentes,
     ResultadoProcessamento
 )
-from .scripts.payments import router as payments_router
 import os
 import warnings
 import json
@@ -71,6 +70,9 @@ from pydantic import BaseModel, Field
 # ============================================================================
 
 load_dotenv()
+
+# Agora podemos importar módulos que dependem de variáveis de ambiente
+from .scripts.payments import router as payments_router
 
 # Logging estruturado
 logging.basicConfig(

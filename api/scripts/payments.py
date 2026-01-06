@@ -185,9 +185,39 @@ def serialize_row(row_dict: dict) -> dict:
     return {k: serialize_value(v) for k, v in row_dict.items()}
 
 
-# ============================================================================
-# CUSTOMERS ENDPOINTS
-# ============================================================================
+@router.get("/test-connection")
+async def test_asaas_connection():
+    """Testa a conexão com a API do Asaas."""
+    try:
+        success = await asaas_client.test_connection()
+        if success:
+            return {"status": "success", "message": "Conexão com Asaas estabelecida"}
+        else:
+            return {"status": "error", "message": "Falha na conexão com Asaas"}
+    except Exception as e:
+        logger.error(f"Erro no teste de conexão: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/validate-cpf-cnpj")
+async def validate_cpf_cnpj_endpoint(cpf_cnpj: str):
+    """Valida CPF ou CNPJ."""
+    try:
+        from ..lib.models import validate_cpf_cnpj
+        cleaned = validate_cpf_cnpj(cpf_cnpj)
+        doc_type = "CPF" if len(cleaned) == 11 else "CNPJ"
+        return {
+            "valid": True,
+            "type": doc_type,
+            "cleaned": cleaned,
+            "original": cpf_cnpj
+        }
+    except ValueError as e:
+        return {
+            "valid": False,
+            "error": str(e),
+            "original": cpf_cnpj
+        }
 
 CUSTOMER_COLUMNS = [
     "id", "asaas_id", "name", "email", "cpf_cnpj", 

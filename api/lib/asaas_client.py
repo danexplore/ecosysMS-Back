@@ -30,6 +30,8 @@ ASAAS_BASE_URL = (
     else "https://api.asaas.com/v3"
 )
 
+logger.info(f"🔧 Asaas Config: Sandbox={ASAAS_SANDBOX}, API_KEY={'***' + ASAAS_API_KEY[-4:] if ASAAS_API_KEY else 'NOT_SET'}")
+
 # Timeout para requisições (segundos)
 TIMEOUT = 30.0
 
@@ -44,11 +46,13 @@ RETRY_DELAY = 2  # segundos
 
 def get_asaas_headers() -> Dict[str, str]:
     """Retorna headers para autenticação na API Asaas."""
-    return {
+    headers = {
         "access_token": ASAAS_API_KEY,
         "Content-Type": "application/json",
         "User-Agent": "ecosys-payments/1.0"
     }
+    logger.debug(f"🔑 Headers gerados: access_token={'***' + ASAAS_API_KEY[-4:] if ASAAS_API_KEY else 'NOT_SET'}")
+    return headers
 
 
 def with_retry(max_retries: int = MAX_RETRIES, delay: float = RETRY_DELAY):
@@ -92,8 +96,28 @@ class AsaasClient:
     """Cliente HTTP para API do Asaas."""
 
     def __init__(self):
+        # Recarregar variáveis de ambiente para garantir
+        from dotenv import load_dotenv
+        load_dotenv()
+
+        global ASAAS_API_KEY, ASAAS_SANDBOX, ASAAS_BASE_URL
+        ASAAS_API_KEY = os.getenv("ASAAS_API_KEY", "")
+        ASAAS_SANDBOX = os.getenv("ASAAS_SANDBOX", "true").lower() == "true"
+        ASAAS_BASE_URL = (
+            "https://api-sandbox.asaas.com/v3"
+            if ASAAS_SANDBOX
+            else "https://api.asaas.com/v3"
+        )
+
         self.base_url = ASAAS_BASE_URL
         self.headers = get_asaas_headers()
+
+        # Validação da configuração
+        if not ASAAS_API_KEY or ASAAS_API_KEY == "":
+            logger.error("❌ ASAAS_API_KEY não configurada. Verifique as variáveis de ambiente.")
+            raise ValueError("ASAAS_API_KEY não configurada. Verifique as variáveis de ambiente.")
+
+        logger.info(f"✅ AsaasClient inicializado - Ambiente: {'Sandbox' if ASAAS_SANDBOX else 'Produção'} - Headers: {len(self.headers)} campos")
 
     @with_retry()
     async def _request(
@@ -117,7 +141,17 @@ class AsaasClient:
         """
         url = f"{self.base_url}{endpoint}"
 
+        # Log dos headers (sem expor a API key completa)
+        safe_headers = {k: (v if k != "access_token" else "***" + v[-4:]) for k, v in self.headers.items()}
+        logger.info(f"📡 {method} {url} - Headers: {safe_headers}")
+
+        if data:
+            logger.info(f"📤 Data: {data}")
+
         async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            # Usar headers da instância
+            logger.debug(f"📤 Enviando headers: { {k: (v if k != 'access_token' else '***' + v[-4:]) for k, v in self.headers.items()} }")
+
             response = await client.request(
                 method=method,
                 url=url,
@@ -125,6 +159,8 @@ class AsaasClient:
                 json=data,
                 params=params
             )
+
+            logger.info(f"📥 Response Status: {response.status_code}")
 
             response.raise_for_status()
             return response.json()
@@ -177,7 +213,17 @@ class AsaasClient:
                 "additionalEmails": str
             }
         """
-        return await self._request("POST", "/customers", data=data)
+        logger.info(f"Enviando dados para criação de cliente: {data}")
+        try:
+            result = await self._request("POST", "/customers", data=data)
+            logger.info(f"Cliente criado com sucesso: {result.get('id')}")
+            return result
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Erro HTTP {e.response.status_code} ao criar cliente: {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Erro inesperado ao criar cliente: {e}")
+            raise
 
     async def update_customer(
         self, customer_id: str, data: Dict[str, Any]
@@ -185,9 +231,16 @@ class AsaasClient:
         """Atualiza um cliente existente."""
         return await self._request("PUT", f"/customers/{customer_id}", data=data)
 
-    async def delete_customer(self, customer_id: str) -> Dict[str, Any]:
-        """Remove um cliente."""
-        return await self._request("DELETE", f"/customers/{customer_id}")
+    async def test_connection(self) -> bool:
+        """Testa a conexão com a API do Asaas."""
+        try:
+            # Tenta fazer uma requisição simples para testar
+            await self.list_customers(limit=1)
+            logger.info("✅ Conexão com Asaas estabelecida")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Falha na conexão com Asaas: {e}")
+            return False
 
     # ========================================================================
     # PAYMENTS (COBRANÇAS)
@@ -422,26 +475,39 @@ async def sync_customer_to_asaas(
     Sincroniza um cliente local com o Asaas.
     Se o cliente já existe (por CPF/CNPJ), retorna os dados existentes.
     """
+    # Importar função de validação
+    from .models import validate_cpf_cnpj
+
+    # Validar CPF/CNPJ
+    try:
+        cleaned_cpf_cnpj = validate_cpf_cnpj(cpf_cnpj)
+    except ValueError as e:
+        raise ValueError(f"CPF/CNPJ inválido: {e}")
+
     # Primeiro, tenta encontrar o cliente
-    existing = await asaas_client.list_customers(cpf_cnpj=cpf_cnpj)
+    existing = await asaas_client.list_customers(cpf_cnpj=cleaned_cpf_cnpj)
     
-    if existing.get("data") and len(existing["data"]) > 0:
-        logger.info(f"Cliente {cpf_cnpj} já existe no Asaas")
+    if existing and len(existing.get("data", [])) > 0:
+        logger.info(f"Cliente {cleaned_cpf_cnpj} já existe no Asaas")
         return existing["data"][0]
 
-    # Se não existe, cria
+    # Cliente não existe, criar novo
     customer_data = {
         "name": name,
-        "cpfCnpj": cpf_cnpj,
+        "cpfCnpj": cleaned_cpf_cnpj
     }
+    
     if email:
         customer_data["email"] = email
     if phone:
-        customer_data["mobilePhone"] = phone
+        # Limpar telefone para apenas dígitos
+        cleaned_phone = ''.join(filter(str.isdigit, phone))
+        if len(cleaned_phone) >= 10:  # Pelo menos DDD + número
+            customer_data["mobilePhone"] = cleaned_phone
     if external_reference:
         customer_data["externalReference"] = external_reference
 
-    logger.info(f"Criando cliente {cpf_cnpj} no Asaas")
+    logger.info(f"Criando cliente {cleaned_cpf_cnpj} no Asaas com dados: {customer_data}")
     return await asaas_client.create_customer(customer_data)
 
 
