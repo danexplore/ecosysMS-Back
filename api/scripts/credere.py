@@ -12,6 +12,10 @@ from ..lib.db_connection import get_conn, release_conn
 load_dotenv()
 logger = logging.getLogger(__name__)
 
+def get_session():
+    """Retorna uma nova sessão requests"""
+    return requests.Session()
+
 def validate_cnpj(cnpj: str) -> Optional[str]:
     """Valida e normaliza CNPJ (remove caracteres não numéricos)"""
     if not cnpj:
